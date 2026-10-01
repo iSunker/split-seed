@@ -529,7 +529,7 @@ def _farm_mirror(path: str, roots: list[str], farm_root: str) -> str | None:
 
     v3 之后 cross-seed 扫的是农场（`DATA_DIRS=/…/reseed_farm`，一个扁平目录，
     每个子项是原 dataDir 直接子项的硬链接），报上来的 searchee 路径因此长这样：
-        `/volume1/video/download/reseed_farm/<一级>/…`
+        `/volume1/video/download/reseed/reseed_farm/<一级>/…`
     而 pack 的 `roots` 还停在原目录。两套路径靠这条规则对齐：
         `<某个root>/<一级>/<其余>`  →  `<farm_root>/<一级>/<其余>`
     —— 原 dataDir 本身则映射到农场根。归不到任何 root 返回 None。

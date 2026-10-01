@@ -24,7 +24,7 @@
 # ★ 2026-09-12 修，见 SUMMARY §16.2.1。这条不改的话 `--verify` 会**永远通过**。
 #   切换之前 DATA_DIRS = 49 条源目录，读它就等于读期望集，正确。
 #   而**切换这个动作本身**就是把 DATA_DIRS 改成农场那一条：
-#       DATA_DIRS=/volume1/video/download/reseed_farm     ← 源 == 农场
+#       DATA_DIRS=/volume1/video/download/reseed/reseed_farm     ← 源 == 农场
 #   于是校验变成**农场跟自己比**：0 漂移、永远 PASS、还每天报"一切正常"。
 #   ★ 一般原则：**校验的"期望值"绝不能来自被校验对象本身。**
 #     这种退化不报错、只静默地变成永远通过 —— 比不做校验更坏，因为它给你信心。

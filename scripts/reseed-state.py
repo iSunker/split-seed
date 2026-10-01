@@ -737,7 +737,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--category")
     a.add_argument("--farm-root",
                    help="v3：cross-seed 实际扫描的硬链接农场根（如 "
-                        "/volume1/video/download/reseed_farm）。设了它，农场路径才能"
+                        "/volume1/video/download/reseed/reseed_farm）。设了它，农场路径才能"
                         "归回本包 —— 不设的话 sync 会把整包判成“别的包”而集体降级")
     a.add_argument("--pattern", default="*")
     a.add_argument("--exclude", nargs="*", default=[])
