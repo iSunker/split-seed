@@ -36,6 +36,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from datadirs_rules import check_paths  # noqa: E402
 
 
+# ★★ 强制 stdout/stderr 用 UTF-8 —— Windows 控制台默认 GBK，
+#   一旦打印非 GBK 字符（`…`/`→`/`✗`）就 UnicodeEncodeError。
+#   ★ 那个异常**会污染退出码**（崩成 rc≠0），而本脚本的 rc **是有语义的**
+#     ⇒ 会把"崩溃"误读成"命中分类目录名"（`ERR-AI-03` 的形状）。
+#   ★ 同 `scripts/diag/check-datadirs-names.py` 里那段：**兄弟脚本早就有，本脚本漏了**
+#     （`§29` 同形：一个切换里漏改一个）。
+#   ★★ 还有第二层：本脚本**被 `tests/test_datadirs_names.py` 当子进程跑**，
+#     父进程按 `encoding="utf-8"` 解管道 ⇒ 子进程若吐 GBK，父进程得到乱码
+#     ⇒ `"儿童" in out` 变 **False** ⇒ **测试在这台机器上恒红**（2026-09-29 实测 3/26）。
+#     ★ 这一条**只有真跑才看得见**（源码里那段话字面是对的）。
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:  # noqa: BLE001
+    pass
+
+
 def dirs_at_level(root: str, level: int) -> list[str]:
     """返回 root 下第 level 层子目录的**相对路径**（相对 root），已排序。"""
     if level < 1:
