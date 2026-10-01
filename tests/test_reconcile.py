@@ -258,9 +258,13 @@ ck("★ 那个文件没有被建出来", os.path.exists(_missing), False)
 ck("★ 连父目录都没被建（证明没交给 StateStore）",
    os.path.isdir(os.path.dirname(_missing)), False)
 ck("正文点名「状态库不在」", "状态库不在" in note, True)
-ck("库不在时**不发**告警（没跑到，不是有信号）",
-   [e for e in events if e[0] == "alert"], [])
-ck("差值 0 时**不发**告警", events, [])
+ck("库不在时**不发**那两条告警（没跑到，不是有信号）",
+   [e[3] for e in events if e[0] == "alert" and e[3] in
+    ("unclaimed-searchee", "b-c")], [])
+# ★ LOG_A 里有一条 `Found 0 torrents for {`（三行式）⇒ **会**发 reconcile-other-found。
+#   这正是 2026-10-02 的处置：别的 Found 形状不再静默。见下面 ⑤ 段。
+ck("★ 但『别的 Found 形状』照发（LOG_A 里有三行式）",
+   [e[3] for e in events if e[0] == "alert"], ["reconcile-other-found"])
 
 # ★★ 下面两格钉的是**另外两个出口** —— 它们此前**一条断言都没有**：
 #    三个出口里只有 `log-parse-miss` 被钉过，另两条**整段删掉测试也不会红**。
@@ -340,7 +344,8 @@ events.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_D], db=None, db_path=None))
 ck("控制**通过**（L1 数到了）", m["fa"], 0)
 ck("b == 0（空转本身）", m["fb"], 0)
-ck("空转发的是 alert", [e[0] for e in events], ["alert"])
+ck("空转发的是 alert", [e[3] for e in events if e[0] == "alert" and e[3] == "reconcile-empty"],
+   ["reconcile-empty"])
 ck("key 是 reconcile-empty（★ 不是 reconcile-controls）",
    events[0][3], "reconcile-empty")
 ck("正文点明「不是「干净」」", "干净" in events[0][2], True)
@@ -373,7 +378,8 @@ print("== ④ 差不为 0 → 必须真的发 alert，且 key 固定 ==")
 events.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_B], db=None, db_path=None))
 ck("差值 1 被报出来", m["fd"], 1)
-ck("发了一条 alert", [e[0] for e in events], ["alert"])
+ck("发了一条 log-parse-miss alert",
+   [e[3] for e in events if e[0] == "alert" and e[3] == "log-parse-miss"], ["log-parse-miss"])
 ck("key 是 log-parse-miss（冷却靠它去重）", events[0][3], "log-parse-miss")
 # ★ 留证行必须在**告警正文**里（只在日报正文里不算 —— 告警和日报是两条路）
 ck("告警正文带留证行", "Miss.2021" in events[0][2], True)
@@ -586,6 +592,62 @@ ck("★ 正文带上「上次成功」的时刻", "上次成功" in note, True)
 ck("★ 且**不是**「从未成功」—— 那两句话指向完全不同的处置",
    "从未成功读到过" in note, False)
 print("   ↑ ③ 的正文：", note.splitlines()[-2].strip()[:100])
+
+# --------------------------------------------------------------------------- #
+# ⑤ ★★★ 其它 Found 形状必须**报警**，且 a 的口径**不含**三行式（2026-10-02 修）
+# --------------------------------------------------------------------------- #
+# 现场（§32.16 第 7 个真 bug）：cross-seed 有**两种** `] Found ` 行 ——
+#   ① 单行式 `Found <片名> [hash] on <站> by <判定> from dataDir (…) - …`（含站名）；
+#   ② 三行式 `[webhook] Found N torrents for {`（本行 + path: + }，**无站名**）。
+# 判据（`FOUND_LITS` 六字面量 / `_RE_FOUND`）只描述① ⇒ ②掉进 `other_found`
+# **且一声不响**（09-16~09-21 每天几百条，10-01 还有 136 条）⇒ a 长期漏计。
+# ★ 本次口径拍板：**a = 「单行式（可回灌）已识别条数」，三行式刻意不进 a**
+#   （并进 a 会让 a−b 常年为正、判据恒红）。处置是**把 other_found 报出来**。
+print("== ⑤ 三行式：不进 a、但必须发 alert（不再静默） ==")
+# 一天里既有单行式（靶心）又有三行式（别的形状）。
+LOG_3LINE = "\n".join([
+    # 三行式的三行（本行 + path + }）—— 照生产抄
+    '2026-10-01 01:00:00.000 info: [webhook] Found 1 torrents for {',
+    "2026-10-01 01:00:00.001 info:   path: '/v/farm/The.Movie.2020',",
+    "2026-10-01 01:00:00.002 info: }",
+    # 一条单行式（靶心）
+    '2026-10-01 01:00:01.000 info: [webhook] Found The.Movie.2020 [abcd1234...]'
+    ' on HDFans by MATCH from dataDir (/v/farm/The.Movie.2020) - MATCH',
+])
+r5 = count_found_lines(LOG_3LINE)
+ck("★ 三行式**不进** a（a 只数单行式）", r5.a, 1)
+ck("★ b（正则）也只吃单行式", r5.b, 1)
+ck("★ a − b 仍为 0（三行式不参与，判据不恒红）", r5.delta, 0)
+ck("★ 三行式的『Found N torrents for {』那一行进了 other_found",
+   sum(r5.other_found.values()), 1)  # 只有含 `] Found ` 的那一行（path / } 两行不含）
+ck("其它形状里有『torrents for』那一类", any("torrents for" in k for k in r5.other_found), True)
+
+# ★ 端到端：把它喂给 reconcile_watch，必须**发一条 key=reconcile-other-found** 的告警。
+D.RECONCILE_FILE = pathlib.Path(tempfile.mkdtemp()) / ".reconcile.state"
+LOG_3 = os.path.join(tempfile.mkdtemp(), "info3line.log")
+pathlib.Path(LOG_3).write_text(LOG_3LINE, encoding="utf-8")
+events.clear()
+note5, m5 = D.reconcile_watch(argparse.Namespace(log=[LOG_3], db=None, db_path=None))
+_keys5 = [e[3] for e in events if e[0] == "alert"]
+ck("★★ 其它 Found 形状 ⇒ 真的发了 alert（不再静默）", _keys5, ["reconcile-other-found"])
+ck("★ metrics 带 f_other（别的形状总数）", events[0][4].get("f_other"), 1)
+ck("★ metrics 带 f_3line（三行式那一类单独点名）", events[0][4].get("f_3line"), 1)
+ck("★ 正文写明 a 的口径（不是「搜出去总量」）",
+   "搜出去总量" in events[0][2], True)
+ck("★ 正文点名三行式已知、且刻意不进 a",
+   "三行式" in events[0][2] and "没有站名" in events[0][2], True)
+ck("★ a 仍是 1（没被三行式污染）—— 正文读数与 metrics 一致",
+   m5.get("fa"), 1)
+
+# 阴性对照：**只有**单行式的日志 —— 一条别的形状都没有 ⇒ **不发**那条告警。
+LOG_ONLY1 = ('2026-10-01 01:00:01.000 info: [webhook] Found M [abcd1234...]'
+             ' on HDFans by MATCH from dataDir (/v/farm/M) - MATCH')
+LOG_1 = os.path.join(tempfile.mkdtemp(), "info1only.log")
+pathlib.Path(LOG_1).write_text(LOG_ONLY1, encoding="utf-8")
+events.clear()
+note6, m6 = D.reconcile_watch(argparse.Namespace(log=[LOG_1], db=None, db_path=None))
+ck("★★ 对照：只有单行式 ⇒ **不发**其它形状的告警（判据非恒真）",
+   [e[3] for e in events if e[0] == "alert"], [])
 
 print()
 if fails:

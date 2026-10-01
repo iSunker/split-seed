@@ -2026,6 +2026,19 @@ def _resolve_searchee_to_pack(
 #   这跟 `NanyangPT` 与 `NanyangPT (南洋)` 是同一个形状 —— **一个名字盖了
 #   两种模型**。所以下面每个数都**绑定自己的口径名**，不出现裸的 `other_pack`。
 #
+# ★★★ 2026-10-02 拍板：**`a` 的口径名 = 「单行式（可回灌）已识别条数」**，
+#   不是「搜出去总量」。为什么必须写死这个名字：
+#   cross-seed 有**两种** `] Found ` 行 ——
+#     ① **单行式**（本判据的靶心）：`Found <片名> [hash] on <站> by <判定> from dataDir (…) - …`
+#        ⇒ 含站名，状态机可回灌「哪个站搜到了」；
+#     ② **三行式**：`[webhook] Found N torrents for {`（本行 + `path: …` + `}`）
+#        ⇒ **没有站名**，回灌用不上 ⇒ **刻意不进 a**。
+#   若把它并进 a，则 `a−b`（b 只吃单行式）会**常年为正**、判据**恒红** —— 那是
+#   把判据搞坏，不是修好。⇒ 正确处置是**显式报一条**（`other_found` 非空即告警，
+#   见 `drive-loop.reconcile_watch`），而不是把它算进 a。
+#   ★ 所以：**别拿 `a` 去解释「下一批会发几条 webhook」**（§B.10 第 14 条：
+#     读数一样、含义相反）。
+#
 # 目标消息形状，用**独立字面量**描述（无捕获组、无量词、无锚点）。
 # ★ 每个字面量**单独报数** —— "是哪个词把行数砍下来的"一眼可见。
 # ★ 第一版的教训：拿 `] Found ` 当基线 → 数到 2200，a − b 报了 1189 的**假差**。
@@ -2053,12 +2066,18 @@ _LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+ \w+: (?P<msg>.*)$"
 
 @dataclass
 class FoundLineCount:
-    """a − b：a 是**形状**（六个字面量的合取），b 是**生产正则** `_RE_FOUND` 命中数。"""
+    """a − b：a 是**形状**（六个字面量的合取）**= 「单行式（可回灌）已识别条数」**，
+    b 是**生产正则** `_RE_FOUND` 命中数。
+
+    ★ 口径（2026-10-02 拍板）：a **不是**「搜出去总量」—— 它只数**单行式**
+      （含站名、可回灌）。三行式 `Found N torrents for {`（无站名）刻意不进 a，
+      由 `other_found` 单独承载并**报警**（见 `drive-loop.reconcile_watch`）。
+    """
     total_lines: int = 0
     a: int = 0
     b: int = 0
     lit_counts: dict = field(default_factory=dict)
-    other_found: dict = field(default_factory=dict)   # 被 L1 吃到、但不是目标形状
+    other_found: dict = field(default_factory=dict)   # 被 L1 吃到、但不是目标形状（含三行式）
     unparsed: list = field(default_factory=list)      # 目标形状、`_RE_FOUND` 却没吃下
     group4: dict = field(default_factory=dict)
     group3_odd: int = 0

@@ -1815,6 +1815,49 @@ def reconcile_watch(args) -> tuple[str, dict]:
                        f"日志: {log_path}\n总行数: {c.total_lines}\n"),
                  key="reconcile-empty", metrics={"fa": c.a, "fb": c.b})
 
+        # ★★★ 2026-10-02 加（§32.16 第 7 个真 bug 的处置）：`other_found` 非空 ⇒ **投告警**。
+        #   为什么：`other_found` 是个**兜底格** —— 任何**没预料到的** `] Found ` 形状都掉
+        #   进来，且历史上**一声不响**。这正是它为什么会藏住 bug：cross-seed 有**两种**
+        #   Found 行，判据（`FOUND_LITS` 六字面量）只描述**单行式**
+        #   `Found <片名> [hash] on <站> by <判定> from dataDir (…) - …`；
+        #   另一种**三行式** `[webhook] Found N torrents for {` 长期掉进这一格
+        #   （09-16~09-21 每天几百条、10-01 还有 136 条），**没人知道**。
+        #   ⇒ 判据如实把它报出来：**"我看见了一种我不认识的东西"**。
+        #   ★ 这一条**独立于上面 a/b 三条告警**（不放进 elif 链）—— 因为
+        #     "有没识别的形状"与"a/b 是否健康"是**两件事**：a==b 可能很干净
+        #     （三行式根本不参与 a/b），而其它形状照旧在漏。
+        #   ★★ 口径（本次拍板）：**a 的口径是「单行式（可回灌）已识别条数」，不是
+        #     「搜出去总量」**。三行式**不进 a** —— 它没有站名（只有 `path:`），
+        #     拿不到「哪个站搜到了」这一维，状态机回灌用不上它。
+        #     所以这里**不**把三行式并入 a（那会让 a−b 常年为正、判据恒红），
+        #     而是**显式报一条**「有 N 行别的 Found 形状（含三行式 M 行）」。
+        #   ★ 冷却：用独立 key，与 a/b 三条互不遮蔽。基线不设 —— 每一条告警都是
+        #     "又出现没识别的形状"，值得人看一眼；真有稳定存在的新形状，应当
+        #     去改 `FOUND_LITS` / `_RE_FOUND`，而不是把它养成常态。
+        if c.other_found:
+            n_other = sum(c.other_found.values())
+            # 三行式单独点名：它是历史上最大的一块（每天几百条），且**已知** ——
+            # 不是为了"修"，是为了让读数**一眼知道是它**，不必再去猜。
+            n_3line = next((v for k, v in c.other_found.items()
+                            if "torrents for" in k), 0)
+            detail = "\n".join(f"   {v:>5}  {k}" for k, v in
+                               sorted(c.other_found.items(), key=lambda kv: -kv[1])[:6])
+            emit("alert", f"观测对账：{n_other} 行「别的 Found 形状」（判据没识别）",
+                 body=("当日日志里有一批 `] Found ` 行，满足 L1 字面量，但**不满足**目标形状"
+                       "（六字面量的合取）⇒ 掉进兜底格 `other_found`，**既不计入 a、也不报警**"
+                       "（这正是它历史上藏住 bug 的方式）。\n"
+                       f"★★ 其中**三行式** `[webhook] Found N torrents for {{` 约 {n_3line} 行 —— "
+                       "它**已知、且刻意不进 a**：三行式**没有站名**（只有 `path:`），"
+                       "状态机推不出「哪个站搜到了」。\n"
+                       "★ **a 的口径是「单行式（可回灌）已识别条数」，不是「搜出去总量」** —— "
+                       "别拿 a 去解释「下一批发几条 webhook」。\n"
+                       "★ 若出现**第三种**没识别的形状（不在下面这几个里）⇒ "
+                       "去核 `FOUND_LITS` / `_RE_FOUND` 是否该扩形状。\n"
+                       f"日志: {log_path}\n"
+                       "---- 别的 Found 形状（形状→行数）----\n" + detail + "\n"),
+                 key="reconcile-other-found",
+                 metrics={"fa": c.a, "fb": c.b, "f_other": n_other, "f_3line": n_3line})
+
     # b − c 与无人认领都要真库；库不可达时**分开报**，别让一条坏了带走另一条。
     store = snap = None
     try:
