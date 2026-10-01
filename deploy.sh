@@ -43,6 +43,11 @@ BACKUP_ROOT="$SRC/.deploy-backup"
 FILES=(
   "docker-compose.yml::compose.yaml"
   "cross-seed/config.js::cross-seed/config.js"
+  # ★ 2026-10-01：cross-seed 的**启动闸门**（`command: ["sh", "/config/wait-for-qb.sh"]`）。
+  #   它在容器内是 `/config/wait-for-qb.sh`（./cross-seed 挂到 /config），故必须随本白名单
+  #   一起上 NAS —— 否则 compose 里引用的那个文件**不存在** ⇒ 容器起不来（`no such file`）。
+  #   与上面 config.js 同一种"挂载目录里的文件"（同一条：动它之后 `--force-recreate`）。
+  "cross-seed/wait-for-qb.sh::cross-seed/wait-for-qb.sh"
   "hlink/config.yml::hlink/config.yml"
   ".dockerignore::.dockerignore"
   "orchestrator/Dockerfile::orchestrator/Dockerfile"
@@ -136,6 +141,24 @@ FILES=(
   #   ★ 它**不进任何计划任务**：只在 DSM 任务计划里手动运行一次，
   #     手动跑 → 用户选 root → 脚本框一句 `sh <路径>/rm-staging.sh <目标> --apply`。
   "scripts/rm-staging.sh::rm-staging.sh"
+  # ★★ 2026-09-29：**容器巡检拉起件**的两个文件。
+  #
+  #   ★★ 为什么**改变**了原决定（原决定写在本文件的漂移哨兵 KNOWN_NAS 里：
+  #      「宿主机运行、故意不部署」）：
+  #      当时的设计是"挂在 DSM 计划任务上、由宿主机跑" ⇒ 部署它 = 假一致
+  #      （deploy.sh 推上去的那份，与"到底谁在跑"无关）。
+  #      **2026-09-29 用户改方案：改成常驻容器**（`reseed-watcher`，见 compose 里
+  #      那段头注）⇒ 这两个文件现在是**容器读的**，而容器读的是 compose 目录里的
+  #      那份 ⇒ **必须由 deploy.sh 保证两边一致**，否则"改了仓库、容器还跑旧的"
+  #      且**没有任何读数会报**（这正是本仓最怕的形状）。
+  #
+  #   ★ 映射到 `scripts/diag/`（**不是** compose 根）：因为 compose 里
+  #     `command: ["sh", "scripts/diag/watch-containers-loop.sh"]`
+  #     与 `working_dir: /volume2/.../<compose>` ⇒ 相对路径就是 `scripts/diag/`。
+  #     （`chk58.sh` 等"人手动跑"的件仍在 `KNOWN_NAS`、**不在**这里 ——
+  #       判据是「**容器/自动机制会不会读它**」，不是"它是不是诊断件"。）
+  "scripts/diag/watch-containers.sh::scripts/diag/watch-containers.sh"
+  "scripts/diag/watch-containers-loop.sh::scripts/diag/watch-containers-loop.sh"
 )
 
 MODE="${1:---dry-run}"

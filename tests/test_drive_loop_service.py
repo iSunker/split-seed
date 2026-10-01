@@ -131,15 +131,21 @@ if YML and isinstance(svcs.get("drive-loop"), dict):
     #   ★★ 2026-09-17：`autoheal` **必须排除在外** —— 它**故意**带同一个 profile
     #     （与 drive-loop 同生同死，见 ⑦ 段）。不排除的话，这条一加服务就红，
     #     而它红得**有道理却指错方向**（读者会去删 autoheal 的 profile）。
-    _LOCKED = {"drive-loop", "autoheal"}          # ← 唯二允许带 profile 的服务
+    #   ★★ 2026-09-29：`watcher` **同样排除** —— 理由**完全同族**：它也是
+    #     「与 drive-loop 同生同死」的**侧车**（容器巡检拉起件，见其服务块头注）。
+    #     判据不变：**只有"服务 drive-loop 的侧车"才允许带这个 profile**。
+    _LOCKED = {"drive-loop", "autoheal", "watcher"}   # ← 允许带 profile 的服务
     _others = {n: s.get("profiles") for n, s in svcs.items()
                if n not in _LOCKED and s.get("profiles")}
     ck("★★ ①c 其余服务**都不带** profiles（带 = 被一起锁住，另一种事故）",
        _others == {}, repr(_others))
-    #   ★ 再钉一条：**允许带 profile 的恰好是那两个**，别多也别少
+    #   ★ 再钉一条：**允许带 profile 的恰好是那三个**，别多也别少。
+    #   ★★ 为什么是"恰好"而不是"至少"：多一个 = 某个业务服务被**误锁**
+    #     （表现是"cross-seed 搜不到任何站"那种远距离症状）；少一个 = 侧车会
+    #     被裸的 `docker compose up -d` **单独**拉起来（握着 docker.sock 空转）。
     _withp = sorted(n for n, s in svcs.items() if s.get("profiles"))
-    ck("★ ①c2 带 profile 的服务**恰好**是 autoheal + drive-loop（多一个就是误锁）",
-       _withp == ["autoheal", "drive-loop"], repr(_withp))
+    ck("★ ①c2 带 profile 的服务**恰好**是 autoheal + drive-loop + watcher（多一个就是误锁）",
+       _withp == ["autoheal", "drive-loop", "watcher"], repr(_withp))
 
     # ---- ①d 不写 build:（NAS 上 build 上下文不同）-------------------------
     ck("★ ①d drive-loop 不写 build:（NAS 的构建上下文是 compose 目录，写了会炸）",
@@ -345,10 +351,58 @@ if _DOCKER:
        "autoheal" not in _default, repr(sorted(_default)))
     ck("★★ ②f 加 --profile 后 **autoheal 也在**（与 drive-loop 一起被显式启用）",
        "autoheal" in _profiled, repr(sorted(_profiled)))
+    #   ★★ 2026-09-29：`watcher`（容器巡检拉起件）同 profile ⇒ 同样两个方向都要钉。
+    ck("★★ ②g 默认集里 **watcher 也不在**（它也是 drive-loop 的侧车）",
+       "watcher" not in _default, repr(sorted(_default)))
+    ck("★★ ②h 加 --profile 后 **watcher 也在**",
+       "watcher" in _profiled, repr(sorted(_profiled)))
 else:
     print("  --   本机没有可用的 docker ⇒ ② 段未验（**不是通过**）。")
     print("  --   要补验：在有 docker 的机器上跑 "
           "`docker compose config --services`，默认集里应当**没有** drive-loop。")
+
+# ==========================================================================
+print("\n=== ②w watcher（容器巡检拉起件）：安全性质 ===")
+# ==========================================================================
+# ★★ 这一段钉的是**本改动最大的新增风险**（第 2 个挂 docker.sock 的容器）。
+#    每一条都对应一个"错了会静默出事"的形状，理由写在各自下面。
+_w = svcs.get("watcher")
+ck("②w-1 watcher 服务存在", _w is not None, repr(sorted(svcs)))
+if _w:
+    #   ★★★ `restart: always` —— 这是**关键的一条，且与业务容器相反**。
+    #     业务容器用 `unless-stopped`（要能 `docker stop` 停住）；
+    #     而 watcher 的职责是"`dockerd` 重启后把别人拉回来"⇒ 它**自己必须先回来**
+    #     ⇒ 必须 `always`。★ 用 `unless-stopped` 的话，它**盖不住自己**：
+    #     `dockerd` 重启后它不会自己起，而"它没起"这件事**没有任何读数会报**。
+    ck("★★★ ②w-2 watcher 用 restart: always（**不是** unless-stopped）—— "
+       "否则它自己盖不住 dockerd 重启，而那正是它存在的理由",
+       _w.get("restart") == "always", repr(_w.get("restart")))
+    #   ★★ socket 必须只读挂载（与 autoheal 同规格）。可写挂载是**多余**的权限。
+    _vols = [str(v) for v in (_w.get("volumes") or [])]
+    _sock = [v for v in _vols if "docker.sock" in v]
+    ck("★★ ②w-3 watcher 挂 docker.sock", bool(_sock), repr(_vols))
+    ck("★★ ②w-4 socket 挂成 **:ro**（给了写权限 = 白送 root 等价，没必要）",
+       bool(_sock) and all(v.endswith(":ro") for v in _sock), repr(_sock))
+    #   ★★ 用 glibc 基础镜像（python:3.12-slim），**不是 alpine**。
+    #     实测：群晖的 docker/compose 是 glibc 动态链接，alpine(musl) 里跑会
+    #     `no such file or directory`（缺 loader）。这条一错 = 容器起不来。
+    ck("★★ ②w-5 用 glibc 基础镜像（python:3.12-slim）—— alpine 跑不了宿主的 docker",
+       _w.get("image") == "python:3.12-slim", repr(_w.get("image")))
+    #   ★★ compose 目录挂**同路径**：因为干活的是**宿主 daemon**，
+    #     而 compose 文件里是宿主路径 ⇒ 换路径会让它解析出错误挂载。
+    ck("★★ ②w-6 compose 目录挂载是**同路径**（左边 == 右边）",
+       any(v.split(":")[0] == v.split(":")[1]
+           for v in _vols if "/volume2/" in v), repr(_vols))
+    #   ★ 宿主 docker + compose 插件都挂进来了（镜像里没有它们）。
+    ck("★ ②w-7 宿主 docker 与 compose 插件都从宿主挂进来（镜像里没有）",
+       sum(1 for v in _vols if "ContainerManager" in v) >= 2, repr(_vols))
+    #   ★ 别写 build:（NAS 构建上下文不同，本仓踩过）
+    ck("★ ②w-8 watcher 不写 build:", "build" not in _w, repr(_w.get("build")))
+    #   ★ 入口是那个循环脚本
+    _cmd = _w.get("command")
+    _cmd_s = " ".join(_cmd) if isinstance(_cmd, list) else str(_cmd or "")
+    ck("★ ②w-9 入口是 watch-containers-loop.sh（不是一次性 watch-containers.sh）",
+       "watch-containers-loop.sh" in _cmd_s, repr(_cmd_s))
 
 # ==========================================================================
 print("\n=== ③ 常驻入口脚本：命令行区段 ===")
@@ -809,8 +863,32 @@ ck("⑥b drive-loop-nas.sh 仍在白名单里（生产那份不能被顶掉）",
    '"scripts/drive-loop-nas.sh::drive-loop/run.sh"' in _DEP, "run.sh 掉出白名单了")
 #   ★ chk58.sh **故意不进** FILES（它是 NAS 侧诊断件，不部署）——
 #     这条钉的是"别顺手把它加进去"（加了就是**假一致**：生产上有个没人调的脚本）。
-ck("★ ⑥c chk58.sh **不在**白名单里（NAS 侧诊断件，不部署；加进去=假一致）",
-   "chk58.sh" not in _DEP, "chk58.sh 被加进 FILES 了")
+#   ★★ 2026-09-29 修正判据**取法**（原来的写法被一次**注释**弄红了，留痕）：
+#     原来写 `"chk58.sh" not in _DEP` —— 那是**全文子串搜索**，
+#     而本轮我在 deploy.sh 里加了一条**解释性注释**（说明"chk58.sh 这类
+#     人手动跑的件为什么留在 KNOWN_NAS"）⇒ **注释里出现了那个字符串** ⇒ 误报。
+#     ★ 而同一次改动里 watch-containers.sh **确实**进了 FILES —— 两者一真一假，
+#       若照原判据就得把**正确的注释**删掉去迎合断言（**本末倒置**）。
+#     ⇒ 判据改成"**FILES 数组里的条目**"（只看条目行，不看注释）：
+#       这才是它**本来要钉的东西**（"别把 chk58.sh 收进白名单"）。
+#     ★ 教训：**守卫量的东西要对准它声称的意图**；全文子串会把"提到它"当成"用了它"。
+_DEP_ENTRIES = [ln.strip() for ln in _DEP.split("\n")
+                if ln.strip().startswith('"') and "::" in ln]
+ck("★ ⑥c chk58.sh **不在** FILES 的条目里（NAS 侧诊断件，不部署；加进去=假一致）",
+   not any("chk58.sh" in e for e in _DEP_ENTRIES),
+   "chk58.sh 被加进 FILES 了：" + repr([e for e in _DEP_ENTRIES if "chk58.sh" in e]))
+#   ★ 反向对照：判据本身要能判红（防恒真）—— 造一条假的"已加入" FILES 行
+_FILES_FAKE = _DEP + '\n  "scripts/diag/chk58.sh::scripts/diag/chk58.sh"\n'
+_FAKE_ENTRIES = [ln.strip() for ln in _FILES_FAKE.split("\n")
+                 if ln.strip().startswith('"') and "::" in ln]
+ck("★ ⑥c′ 对照：**真把 chk58.sh 加进条目**时，上面那条**判得红**（防恒真）",
+   any("chk58.sh" in e for e in _FAKE_ENTRIES),
+   "判据恒真 ⇒ 它什么也没钉住")
+#   ★★ 同时把**本轮新加的那两个**也钉住（否则 ⑥c 只钉了"没加什么"）
+ck("★ ⑥d watch-containers.sh 与 -loop 都在 FILES 里（容器读它们 ⇒ 必须由 deploy 保证一致）",
+   any("scripts/diag/watch-containers.sh::" in e for e in _DEP_ENTRIES)
+   and any("scripts/diag/watch-containers-loop.sh::" in e for e in _DEP_ENTRIES),
+   repr([e for e in _DEP_ENTRIES if "watch-containers" in e]))
 
 # ==========================================================================
 print("\n=== ⑦ autoheal 侧车：卡死接管 ===")

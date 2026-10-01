@@ -101,7 +101,17 @@ services:
       - SKIP_RECHECK=${SKIP_RECHECK}
       - QBIT_CATEGORY=${QBIT_CATEGORY}
       - CROSSSEED_API_KEY=${CROSSSEED_API_KEY}
-    command: daemon
+    # ★★ 不直接起 daemon —— 改走**启动闸门**（见 cross-seed/wait-for-qb.sh）：
+    #   先等 qbittorrent-reseed 就绪再起 daemon，吸收「daemon 启动时必须登录 qB 校验配置」
+    #   与「qb 在另一个 compose 项目、depends_on 跨不了项目」之间的竞态。
+    #   不做这层的后果：qb 未就绪 ⇒ daemon 重试 6×60s ⇒ exit 0 ⇒ restart 拉起 ⇒ **无限重启循环**
+    #   （`ERR-DOCKER-13`，2026-10-01 实测 `RestartCount=44`）。闸门脚本**带硬超时、绝不无限挂起**。
+    #   ★★ 必须用 **`entrypoint:`** 而不是 `command:`（NAS 首部署**实测**踩到）：
+    #      本镜像的 ENTRYPOINT 是 `catatonit -- /usr/local/bin/cross-seed`
+    #      ⇒ `command: ["sh", ...]` 会被当**参数**喂给 `cross-seed` ⇒
+    #      `error: unknown command 'sh'` ⇒ 崩溃循环。覆盖 entrypoint 才是"换掉要跑的东西"。
+    #   ★ 改这里**必须 `--force-recreate`** 才生效（`entrypoint:` 变了，见 `ERR-DOCKER-01`）。
+    entrypoint: ["/bin/sh", "/config/wait-for-qb.sh"]
     volumes:
       - ./cross-seed:/config
       # ★大包源数据 + 建链接目录：两者必须在同一物理卷，且此处 1:1 挂载
@@ -406,6 +416,93 @@ services:
       # ★ 只读挂载（见上面「爆炸半径」）。★ 路径用字面量 /var/run/docker.sock：
       #   群晖上它就是这个位置（不是 /run/docker.sock）。
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [reseed-net]
+    logging: *logging-limits
+
+  # watcher：**容器巡检拉起件**的常驻运行时（2026-09-29 加）
+  #
+  #   为什么需要它（与 autoheal 的分工，别混）
+  #   ------------------------------------------------
+  #   `autoheal` 治「**卡死**」（进程活着、心跳停、但不退出）；
+  #   `watcher` 治「**没起**」——`exited` / `created` / 被 stop 过 / **从没启动**。
+  #   两者**不重叠、不打架**：watcher 只对"不在跑"动手（`up -d`），
+  #   对"在跑但不 healthy"**只报不动手**（那是 autoheal 的地盘）。
+  #
+  # ★★ 为什么它**必须**是「另一个容器」而不是"在某个业务容器里跑"
+  #   ------------------------------------------------------------
+  #   它要拉起的是**别的**容器。若它跑在业务容器里，那个业务容器一停
+  #   ⇒ **看护件跟着死** ⇒ 谁也救不了。（这正是 2026-09-27 那次停 29 小时
+  #   的形状：`dockerd` 重启 ⇒ 全停 ⇒ 没人拉起。）
+  #   ⇒ 它必须是**独立**的一支，且**用 `restart: always`**：
+  #     ★ 业务容器**不能**用 `always`（那会让 `docker stop` 停不住）；
+  #       而**监视器**用它恰好对 —— **它就该停不住**，因为 `dockerd` 重启后
+  #       `unless-stopped` **不会**把它拉回来（那正是本次要补的洞）。
+  #
+  # ★★ 爆炸半径（本仓**第 2 个**挂 docker.sock 的容器，第 1 个是 autoheal）
+  #   --------------------------------------------------------------------
+  #   `/var/run/docker.sock` ≈ **root 等价**。缓解四条：
+  #     ① 挂成 **`:ro`**（与 autoheal 同规格）；
+  #     ② 它**只做两件事**：`docker inspect` 读状态 + `docker compose up -d` 拉起
+  #        —— 脚本里**没有** exec / rm / stop 任何容器（动作分档见其文件头）；
+  #     ③ `profiles` 锁 ⇒ 生命周期由人的显式决策决定（与 drive-loop / autoheal 同一条）；
+  #     ④ **写死的四个容器名**（不是"治好一切"）—— 只有那四个会被它关注。
+  #   ★ 代价仍写着：**它一旦起来，就能碰这台 NAS 上的所有容器**（与 autoheal 同）。
+  #
+  # ★★★ 镜像与挂载：**三条实测结论**（2026-09-29 在 NAS 上验证，别想当然）
+  #   ------------------------------------------------------------------
+  #   ① 用 **`python:3.12-slim`**（Debian/glibc）——**不是 alpine**。
+  #      ★ 实测：群晖的 `docker` / `docker-compose` 是 **glibc 动态链接**的，
+  #        `alpine`（musl）里跑会报 `no such file or directory`（缺 loader）。
+  #        `python:3.12-slim` 已在 NAS 上（drive-loop 的底座），**不用新拉镜像**。
+  #   ② **docker 与 compose 都不在镜像里** ⇒ 从**宿主机**挂进来（走只读）：
+  #        · `/usr/local/bin/docker` 是**符号链接**，指向
+  #          `/var/packages/ContainerManager/target/usr/bin/docker` ⇒ **要挂真身**；
+  #        · compose 插件同理（真身 `.../usr/bin/docker-compose`），挂到
+  #          `/usr/local/lib/docker/cli-plugins/docker-compose` —— **实测这个位置才会被发现**
+  #          （`/usr/local/libexec/...`、`/usr/lib/...` 都试过，都不认）。
+  #      ★ 用 `python:3.12-slim` 当底 = 与宿主同为 glibc ⇒ 直接可执行。
+  #   ③ compose 目录挂**与宿主完全相同**的路径（不是 `/app`）：
+  #      因为本容器通过 socket 让**宿主 daemon** 干活，而 compose 文件里写的是
+  #      **宿主路径** ⇒ 路径不一致会让它解析出错误的挂载。
+  #      （`drive-loop` 也挂同一路径，同一理由。）
+  #
+  # ★ 为什么 `command` 是那个循环脚本而不是一次性：见 `watch-containers-loop.sh` 头注。
+  #   ★★ 那条循环**故意不因单轮失败而退出** —— 否则一次"拉不起来"会变成
+  #      「容器反复重启」（`restart: always` 会一直拉它），故障被放大。
+  watcher:
+    image: python:3.12-slim
+    container_name: reseed-watcher
+    # ★ 与 drive-loop / autoheal 同一个 profile ⇒ **同生同死**，
+    #   启用仍是那一条显式命令（不会被 `docker compose up -d` 顺手拉起来）。
+    profiles: ["drive-loop"]
+    # ★★ `always` 而不是 `unless-stopped`：见上面那段理由（要它"停不住"）。
+    restart: always
+    environment:
+      - TZ=${TZ}
+      # 巡检间隔（秒）。10 分钟：告警有"同日同容器只投一次"的冷却 ⇒ 频率不影响告警量；
+      # 而 drive-loop 一轮是分钟级 ⇒ 10 分钟足够覆盖「停了没人管」这个窗口。
+      - WATCH_INTERVAL=600
+      - WATCH_COMPOSE_DIR=/volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+      # ★★ 2026-10-01：项目 B（qbittorrent-reseed）的 compose 目录 —— 看护器现在也盯
+      #   `qbittorrent-reseed`（它原不在本栈，停摆 3h47m 没人拉起）。两条 `up -d` 要在
+      #   **各自的目录**里跑（项目 A 有 profile、项目 B 没有），故两个目录都要挂进去。
+      #   与下面 ③ 同一条规则：**与宿主完全相同**的路径。
+      - WATCH_COMPOSE_DIR_QB=/volume2/docker_ssd/qbittorrent-reseed
+    volumes:
+      # ① socket（只读，与 autoheal 同规格）
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # ② 宿主机的 docker + compose 插件（真身；见上面★★★ ②）
+      - /var/packages/ContainerManager/target/usr/bin/docker:/usr/local/bin/docker:ro
+      - /var/packages/ContainerManager/target/usr/bin/docker-compose:/usr/local/lib/docker/cli-plugins/docker-compose:ro
+      # ③ compose 目录，**同路径**（读 compose.yaml + 写 notify/spool）（见上面★★★ ③）
+      - /volume2/docker_ssd/prowlarr_cross-seed_autohardlink:/volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+      # ④ ★★ 2026-10-01：项目 B 的 compose 目录，**同路径**挂载（同 ③ 的规则）。
+      #   不挂它 ⇒ 脚本第 431 行的 `COMPOSE_FILE_QB` 探测恒失败 ⇒ 每趟报"找不到 compose 文件"，
+      #   而 qb 真停了时**拉不起来**。这是"看着绿其实没能力"的典型（A.11 / B.10 第 14 条）。
+      - /volume2/docker_ssd/qbittorrent-reseed:/volume2/docker_ssd/qbittorrent-reseed
+    working_dir: /volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+    # ★ 入口是那个循环；`sh` 显式写出（镜像的 entrypoint 不保证有 sh 之外的假设）。
+    command: ["sh", "scripts/diag/watch-containers-loop.sh"]
     networks: [reseed-net]
     logging: *logging-limits
 

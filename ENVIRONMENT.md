@@ -505,9 +505,31 @@ qB 校验队列单线程。
 
 ## A.10 AI 自身的协作模式
 
-| 能做 | 不能做 |
+~~| 能做 | 不能做 |
 |---|---|
-| 读文件、读 NAS（只读）、写本地代码、写文档、跑本地测试、**生成命令** | 直接操作 NAS、直接发 webhook、碰生产库、做 qB 写操作 |
+| 读文件、读 NAS（只读）、写本地代码、写文档、跑本地测试、**生成命令** | 直接操作 NAS、直接发 webhook、碰生产库、做 qB 写操作 |~~
+
+> ★★ **更正（2026-09-29，来源：用户当场授权）：AI 可以改 NAS 生产 —— 但带两条硬约束。**
+>
+> **能做**：读文件、读 NAS、写本地代码、写文档、跑本地测试、**生成命令**、
+> ★★ **直接操作 NAS 生产**（改文件 / 放脚本 / 改调度 —— 用户明确授权）。
+>
+> **不能做**（未变）：直接发 webhook、碰生产库、做 qB 写操作。
+>
+> ★★ **两条硬约束（用户原话）**：
+> 1. **一次性文件 — 用完立刻删**。不许在别处留下细小文件（临时探针、`cat >` 粘的脚本、
+>    `/tmp` 残留都算）。★ 判据：**做完这一趟，NAS 上没有"多出来的、没人认领的"文件** ——
+>    跑完漂移哨兵 A 方向应仍是 `未知 0`。
+> 2. **长期文件 — 必须放项目目录内**（`/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/`
+>    下），**不许落在项目目录外**（如 `$HOME`、`/tmp`、`/volume1`）。
+>    ★ 放进去的还要**在仓库里登记**（`KNOWN_NAS` / `LOCAL_ONLY`，见漂移哨兵），
+>    否则哨兵会报"未知文件" —— 而**哨兵常红 = 没有哨兵**。
+>
+> ★ **"算做了"的判据仍然是回读**（下面那条不受影响）：**「报告了」≠「做了」** ——
+>   操作完要去**回读实际状态**，不看调用的返回值。
+> ★★ **这次的授权不改变风险性质**：本仓反复钉的四个「看着像做了」形状（见下）
+>   **在 AI 能直接操作之后只会更容易踩**（因为少了一道"人手抄过去"的自然检查点）。
+>   ⇒ **回读**和**漂移哨兵**从"建议"升级成**必须**。
 
 - **怎么确认 AI 真的做了**：**回读实际状态**，不信调用的返回值。
   回读失败要区分「**没跑到**」和「**跑了没事**」（对照 `ERR-AI` 那一族）。
@@ -3345,6 +3367,27 @@ searchee 数与切换前**一致（1888）**。
 > ⇒ **"到底涨没涨、涨到哪"这件事，截至目前仍未定** —— **读数口径问题，不是内存问题**。
 > ② ⬜ **未做**：升镜像到 qB 5.x（残留 ~2.2 GiB 差，属生产变更，性价比待评估）。
 > ⇒ 本条**仍在活跃清单**上（见 `§26.2.3`）。
+> ③ ✅ **已执行（2026-10-01，本次）**：给容器加 **cgroup 硬顶 `mem_limit: 4g` + `memswap_limit: 4g`**
+> （NAS 侧 `/volume2/docker_ssd/qbittorrent-reseed/docker-compose.yml`，`docker compose up -d` 重建；
+> 原文件已备份 `docker-compose.yml.bak-20261001-235712`）。**理由**：本条历史上涨到 8.82 GiB，
+> 而 `docker inspect` 显示 `HostConfig.Memory=0` ⇒ **容器层完全无限制**，无兜底。
+> **实测**（改前 → 改后，同一容器）：
+> | 项 | 改前 | 改后 |
+> |---|---|---|
+> | `HostConfig.Memory` | **0**（无限） | **4294967296**（4 GiB） |
+> | `HostConfig.MemorySwap` | 0 | 4294967296（= 禁 swap） |
+> | cgroup `memory.limit_in_bytes` | 9.2e18（≈无限） | **4294967296** |
+> | 占用（`docker stats` / cgroup） | 351.9 MiB / 525 MB | **310.9 MiB / 4 GiB（7.6%）** |
+> | 状态 | running | running（`RestartCount=0`、`OOM=false`、WebUI:3060 OK） |
+> ★ **取值取舍**：4 GiB = 历史稳态峰值（0.3–0.65 GiB）的 **6× 余量** ⇒ 不误杀正常业务；
+> 真再涨到 4 GiB 即回归病态，那时 **OOMKill 重启是正确保护**（优于 swap 抖动拖垮宿主）。
+> `memswap_limit` 设成**与 `mem_limit` 相等 = 禁 swap**（qB 用 swap 会导致 IO 抖动）。
+> **回滚**：删掉那两行再 `docker compose up -d`（或用备份覆盖）⇒ **零数据风险**。
+> ★★ **本条同时给出两条判据（防第三次重推，见 `§30` 那次重复推导的教训）**：
+> ① **「8.82 GiB」（`VmRSS`）与「10.07 GiB」（cgroup）是同一份内存的两个口径，不是两件事** ——
+> 二者差的是页缓存，**主判据取 cgroup**（`/sys/fs/cgroup/memory/docker/<id>/memory.usage_in_bytes`）；
+> ② **硬链接与内存占用无关** —— 硬链接是 Btrfs 目录项（多文件名指同一 inode），只进**可回收的 page cache**，
+> **不会**推高进程 RSS；它影响的是**磁盘空间**，不是内存。别再把它当内存高的归因（`§30.2` 同类错）。
 
 - **症状**：`qbittorrent-reseed`(:3060) 吃 **8.82 GiB RSS**（/ **10.07 GiB cgroup**），
   而**套件** qB(:8085) 只吃 **1.95 GiB** —— 而套件**种子多 36%、数据多 8.8 倍**。
@@ -3669,6 +3712,67 @@ searchee 数与切换前**一致（1888）**。
   （qB 是 4.2 GiB 且已被 `ERR-DOCKER-11` 压住）。
   ⇒ **别拿"我收到的告警"当"我的系统在崩"**：先分辨告警的**主体**与**病因**。
 - **边界**：**DSM 专有**（`Container Manager` 的邮件模板）。
+
+### ERR-DOCKER-13 ★★★ **跨 compose 项目的「依赖」表达不出来** —— cross-seed 无限重启 + orchestrator 的「缺席是预期」
+
+- **症状（两个，同一条根因的两张脸）**：
+  1. ★★ `reseed-cross-seed` **每 ~5 分钟重启一次**（日志 154 条启动 banner、间隔**精确** 5 分钟；
+     `RestartCount=44`）。看起来像"cross-seed 坏了"。
+  2. ★ `reseed-orchestrator` 常年在 `exited` —— 看起来像"编排器挂了"。
+- **根因（两条，都要知道）**：
+  1. ★★★ **cross-seed 的 `daemon` 子命令在启动时会登录 qB 以校验配置**，而
+     `qbittorrent-reseed` 在**另一个 compose 项目**里 ⇒ compose 的 `depends_on`
+     **无法跨项目表达**。qb 未就绪时：daemon 重试 **6 次 × 60s** →
+     `Your configuration is invalid` → **进程 `exit 0`** → `restart: unless-stopped`
+     **立刻拉起** → 又失败 ⇒ **无限重启循环**。★ 讽刺点：`exit 0` 让
+     `restart: unless-stopped` 把它当成"正常退出"，**每次重启都成功**、永远停不下来。
+  2. ★★ `reseed-orchestrator` 是**一次性 CLI**（`restart: "no"` 且**没有 `command:`**）
+     ⇒ 它**本该缺席**、靠 `docker compose run --rm` 起。`ExitCode=2` 是它自己的
+     "预检未过"退出码，**不是崩溃**。⇒ **不能把"不在常见清单里"读成"漏了"**。
+- **判据（只读）**：
+  - **重启计数才是判据**，不是"日志看着干净"：
+    `docker inspect reseed-cross-seed --format '{{.RestartCount}}'` —— 隔几分钟**再看一次**
+    （涨 ⇒ 在循环）。★ 与 `ERR-DOCKER-12` 同一条：**指标是重启计数**。
+  - **量化循环周期**：`docker logs reseed-cross-seed | grep -c <启动 banner>` +
+    相邻两条的时间差（~5 min = 重试 6×60s 的形状）。
+  - **orchestrator 是否该被盯**：`docker inspect reseed-orchestrator --format '{{.HostConfig.RestartPolicy.Name}}'`
+    ⇒ `no` = **一次性**，盯它 = 每趟假告警。
+- **实测 / 处置（2026-10-01 ~ 10-02）**：
+  - 层一（跨项目依赖的**唯一**可编码处）：看护器 `watch-containers.sh` 把
+    `qbittorrent-reseed` 纳入**第二组清单**，且**项目 B 的 `up -d` 先于项目 A**——
+    **顺序即依赖**。★ 这一层已由 `tests/test_watch_containers.py` ⑧ 段钉住（含阴性对照）。
+  - 层二（保险）：cross-seed 起**启动闸门** `cross-seed/wait-for-qb.sh`——先轮询 qB 的
+    `/api/v2/app/version` 就绪，再 `exec /usr/local/bin/cross-seed daemon`。
+    ★★ **带硬超时、绝不无限挂起**：挂起会变成"卡住的假在跑"（容器 running、无 restart、
+    无告警），**比崩溃循环更难发现**。超时也**照常** `exec`，由 daemon 自己重试兜底。
+  - ★★★ **闸门必须挂 `entrypoint:`，不是 `command:`（NAS 首部署实测踩到，最值钱的一条）**：
+    `ghcr.io/cross-seed/cross-seed` 的 `ENTRYPOINT` 是
+    **`["/usr/bin/catatonit","--","/usr/local/bin/cross-seed"]`**
+    ⇒ 写 `command: ["sh", "/config/wait-for-qb.sh"]` 会被当成**参数追加**到 `cross-seed` 后面
+    ⇒ 容器里跑的是 `cross-seed sh /config/wait-for-qb.sh` ⇒ **`error: unknown command 'sh'`**
+    ⇒ 立刻按 `restart` 拉起 ⇒ **新的崩溃循环**（而且**是静默的**：`docker compose up -d`
+    返回 0，只有 `docker logs` 里那行 `unknown command` 才看得见）。
+    ⇒ 正确写法是覆盖 **`entrypoint:`**（那一层才是"要跑什么"）。
+    ★ **判据**：`docker inspect -f '{{json .Config.Entrypoint}}' reseed-cross-seed` 必须**不是你写的东西**
+    （说明它被换掉了），而 `{{json .Config.Cmd}}` 相应为空；
+    再 `docker logs` 见到 `[wait-for-qb] qB 已就绪` ⇒ 闸门在跑。
+    ★ **同族**：`ERR-DOCKER-01`（compose 改了要 `--force-recreate`）——这里还**多一层**：
+    改 `entrypoint`/`command` 不只是"重建"，而是"**重建对了吗**"（写错层 = 换个姿势崩）。
+    ★★ **为什么这条值得单独记**：`command:` 与 `entrypoint:` 在 YAML 里挨着、看着一样，
+    而**语义相反**（前者是参数、后者是可执行体）——正是 `B.10` 第 14 条「读数一样、含义相反」那族。
+  - ★ **不改 `restart: unless-stopped`** —— 改 `on-failure` 方向相反（退出码是 0，
+    首次 qb 故障后会**永久宕机**）。
+- **实测结果（2026-10-01 ~ 10-02，端到端）**：
+  - `docker restart/--force-recreate reseed-cross-seed` ⇒ 日志见
+    `[wait-for-qb] qB 已就绪（等了 0s）。启动 cross-seed daemon。` → `Logged in to v5.0.4 successfully`
+    → `Your configuration is valid!` → `Server is running on port 2468`；`RestartCount=0`。
+  - ★★ **决定性判据**：`docker stop qbittorrent-reseed`（人为制造 qb 故障）→
+    跑一趟看护器 ⇒ 检出 → **项目 B 目录** `up -d`（**不带 `--profile`**）→ 复读 running →
+    `RC=0`；qb **pid 2559 → 10279**（真拉起，`§32.14` 判据）。
+    而 **cross-seed `RestartCount` 始终 = 0、启动 banner 不增** ⇒
+    **qb 故障期间 cross-seed 一次都没重启**（对比修复前：每 ~5 分钟一次、计数 44）——**闭环兑现**。
+- **边界**：**compose 多项目部署**（同一 `docker` daemon 下的**两个 compose 项目**）专有；
+  单体 `depends_on` 场景不适用。
 
 ### B.4.3 凭据边界
 
