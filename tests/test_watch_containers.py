@@ -331,12 +331,30 @@ try:
           r.returncode == 2, "rc=%s out=%s" % (r.returncode, (r.stdout + r.stderr)[:200]))
     check("  ↳ 且**没有**执行任何 up -d（绝不许打到本机 daemon）",
           lab.calls_of("ACTION") == [], repr(lab.calls_of("ACTION")))
-    # ★ 对照的另一半：**读不出** daemon 身份 ⇒ **放行**（不许误挡生产）。
-    #   这是"反向判据"：只拒能确证的，不要求"必须是 NAS"。
+    # ★★★ 2026-10-03 判据**就地更正**（`§32.17`）：**读不出** daemon 身份 ⇒ 现在判 **rc=2（未验）**，
+    #   而**不是**旧版的 rc=0「放行」。
+    #   ★ 为什么改：旧版写「读不出 ⇒ 放行（不误挡生产）」—— 那是**纯本机推理**。
+    #     2026-10-03 00:13:54 生产实测把它的**另一面**暴露了出来：`dockerd` 重启时
+    #     `docker info` 读不出 ⇒ 五个容器全被 `docker inspect` 报 `missing` ⇒
+    #     脚本判「容器根本没创建」⇒ 去 `up -d`（daemon 不在，白跑）⇒ 投出 5 条
+    #     「容器拉不起来 / 已尝试拉起 / 复读仍不在跑」——**与事实全反**（那晚没尝试过任何真正
+    #     有效的拉起，真因是 daemon 不在）。★ 这是「只拒能确证的」这条**太松**：
+    #     它把「读不出」当成了「没事」，而实测「读不出」**恰恰**是最该报的时刻。
+    #   ⇒ 新判据：读不出 ⇒ **未验（rc=2）**，且**只投一条 daemon 级告警**，
+    #     **不投**任何逐容器「拉不起来」告警、**不执行** up -d。
     lab.daemon = ""
     r = selftest_run_path(lab, "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink")
-    check("★★ 读不出 daemon 身份 ⇒ **放行**（不误挡生产；只拒能确证的开发机）",
-          r.returncode == 0, "rc=%s（读不出 ≠ 是开发机）" % r.returncode)
+    check("★★ 读不出 daemon 身份 ⇒ **未验 rc=2**（测到/没测到必须分得开）",
+          r.returncode == 2, "rc=%s（读不出 = 未验，不是放行）" % r.returncode)
+    check("★★ 且**没有**任何 up -d（daemon 不在时不空跑 compose）",
+          lab.calls_of("ACTION") == [], repr(lab.calls_of("ACTION")))
+    check("★★ 且**没有**逐容器「容器拉不起来」告警（那文案在 daemon 不在时是错的）",
+          not [n for n in lab.spool() if "watch-containers-reseed-" in n
+               or "watch-containers-qbittorrent" in n],
+          lab.spool())
+    check("★★★ 且**有**一条 daemon 级告警（key=watch-containers-daemon）",
+          any("watch-containers-daemon" in n for n in lab.spool()),
+          lab.spool())
 finally:
     lab.cleanup()
 

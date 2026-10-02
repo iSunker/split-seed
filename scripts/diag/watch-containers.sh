@@ -515,6 +515,22 @@ fi
 echo "--- 容器状态 ---"
 NEED_UP=""
 N_BAD=0
+# ★★★ 2026-10-03 加：**daemon 本身不可用** 与 **容器停了** 必须分开
+#   （`§32.17` 那个真 bug —— 生产实测踩到）。
+#   现场：2026-10-03 00:13:54 `dockerd` 重启（ContainerManager 重载，
+#   **NAS 没重启** —— uptime 1d20h 为证），全部容器一起 `exited`。而本脚本
+#   那一刻 `docker info` 失败 ⇒ `DAEMON_ID` 空、`DAEMON_VERDICT=unreadable`，
+#   且 `docker inspect` 对**每个**容器回 `missing` ⇒ 五个全判成「容器根本没创建」。
+#   ⇒ 告警文案说「已尝试拉起、**复读仍不在跑**」—— **与事实不符**：
+#     没有任何东西"试过又失败"，是 **daemon 不在**，`up -d` 根本没意义。
+#   ⇒ 读到这条告警的人会去 `docker logs <容器>`（信里就这么写的），而真因在 daemon。
+#   ★ 判据：`DAEMON_VERDICT=unreadable` 时**整趟改判为「未验」**，
+#     只投**一条** daemon 级告警（key 与逐容器告警不同），**不**投那五条错的。
+DAEMON_DOWN=0
+if [ "$DRY" = 0 ] && [ "$DAEMON_VERDICT" = "unreadable" ]; then
+    DAEMON_DOWN=1
+fi
+
 # ★★ 这个 `while read` 的输入走 **heredoc**，循环体里又调了 `"$PY"` ——
 #   而那次调用的 stdin 是**继承来的**（= 这个 heredoc）。python 一读 stdin
 #   就会把**剩下的行全吃掉** ⇒ 循环只跑第一遍，后面三个容器**静默消失**。
@@ -538,13 +554,24 @@ while IFS='	' read -r name status running health pid ecode; do
             fi
             ;;
         missing)
-            down "$name  **不存在** —— 容器根本没创建"
-            say "     ↳ 可能要整栈 up 一次（compose 文件：${COMPOSE_FILE:-找不到}）"
-            NEED_UP="$NEED_UP $name"; N_BAD=$((N_BAD + 1))
+            if [ "$DAEMON_DOWN" = 1 ]; then
+                # ★★★ daemon 不可用 ⇒ 「不存在」不是"容器被删了"，是**读不到 daemon**。
+                #   绝不把它算进 N_BAD（那会触发"拉起"和那条错的告警）。
+                na "$name  **读不到**（daemon 不可用 —— 不是容器被删）"
+                say "     ↳ 整趟改判「未验」：见下面那条 daemon 级结论。"
+            else
+                down "$name  **不存在** —— 容器根本没创建"
+                say "     ↳ 可能要整栈 up 一次（compose 文件：${COMPOSE_FILE:-找不到}）"
+                NEED_UP="$NEED_UP $name"; N_BAD=$((N_BAD + 1))
+            fi
             ;;
         exited|dead|created|paused)
-            down "$name  status=$status（exit=$ecode, pid=$pid）—— **不在跑**"
-            NEED_UP="$NEED_UP $name"; N_BAD=$((N_BAD + 1))
+            if [ "$DAEMON_DOWN" = 1 ]; then
+                na "$name  status=$status（exit=$ecode）—— **daemon 不可用期间读到的**，不当成「停过」"
+            else
+                down "$name  status=$status（exit=$ecode, pid=$pid）—— **不在跑**"
+                NEED_UP="$NEED_UP $name"; N_BAD=$((N_BAD + 1))
+            fi
             ;;
         restarting)
             na "$name  restarting（正在自己重启，先观察一轮再说）"
@@ -559,10 +586,71 @@ $INSPECT_OUT
 EOF
 echo
 
+# ★★★ 2026-10-03（`§32.17`）：daemon 不可用 ⇒ **另投一条 daemon 级告警**，
+#   然后**跳过**整段"拉起"（`N_BAD` 是 0，所以本来也不会拉起，但要说清楚）。
+#   ★ 为什么不复用逐容器那条告警：那条的正文写死「已尝试拉起 / 复读仍不在跑」，
+#     而 daemon 不在时**什么都没尝试** ⇒ 复用就是**撒谎**（本仓最忌的"读数一样、含义相反"）。
+#   ★ 判据：这条告警的 key 与逐容器那条**不同**（`watch-containers-daemon`），
+#     标题也明说是 **daemon** 不在，不点名任何单个容器。
+if [ "$DAEMON_DOWN" = 1 ]; then
+    say "★★★ docker daemon **不可用**（\`docker info\` 失败 ⇒ 身份读不出）——"
+    say "    这一刻**所有**容器都读不到，**不是**「容器被删」、也**不是**「拉起失败」。"
+    say "    ⇒ 本趟**不拉起、不投逐容器告警**（那些结论在 daemon 不在时不成立）。"
+    UNK=$((UNK + 1))
+    SPOOL="$NOTIFY_ROOT/spool"; ARCHIVE="$NOTIFY_ROOT/archive"
+    if [ ! -d "$SPOOL" ]; then
+        na "spool 目录不存在（$SPOOL）—— daemon 告警**投不出去**"
+    else
+        _day=$(date '+%Y-%m-%d')
+        _tag="watch-containers-daemon-${_day}"
+        _already=0
+        if find "$SPOOL" "$ARCHIVE" -maxdepth 1 -name "*${_tag}*" 2>/dev/null | grep -q .; then
+            _already=1
+        fi
+        if [ "$_already" = 1 ]; then
+            say "  （daemon 今天已投过告警，不重复投）"
+        else
+            _ms=$(date '+%s')000
+            _f="$SPOOL/${_ms}-$$-${_tag}.txt"
+            _tmp="${_f}.tmp"
+            {
+                printf '# reseed-notify v1\n'
+                printf 'kind: alert\n'
+                printf 'level: alert\n'
+                printf 'ts: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+                printf 'host: %s\n' "$(hostname 2>/dev/null || echo unknown)"
+                printf 'key: watch-containers:daemon\n'
+                printf 'title: docker daemon 不可用（不是容器拉不起来）\n'
+                # ★ metrics 里**不许有空格**（键和值都不许）—— 见 notify.py 那段。
+                printf 'metrics: scope=daemon reason=info-unreadable attempted=0\n'
+                printf -- '---\n'
+                printf '本趟 `docker info` 读不出 ⇒ **docker daemon 不可用**（或没权限）。\n'
+                printf '★ 这一刻**所有**容器都读不到 —— 这**不是**「某个容器拉不起来」。\n'
+                printf '★★ 常见的真因：**ContainerManager / dockerd 正在重启**（如 2026-10-03 00:13:54 那次），\n'
+                printf '   NAS 本身**没**重启时也会这样。等 daemon 起来后，下一趟会自己恢复。\n'
+                printf '★ 排查：\n'
+                printf '  sudo docker info          （能不能连上 daemon）\n'
+                printf '  ps -o lstart -C dockerd   （dockerd 是不是刚重启）\n'
+                printf '  uptime                    （区分「daemon 重启」与「NAS 重启」）\n'
+                printf '主机: %s\n' "$(hostname 2>/dev/null || echo unknown)"
+            } > "$_tmp" 2>/dev/null
+            if [ -s "$_tmp" ] && mv -f "$_tmp" "$_f" 2>/dev/null; then
+                ok "已投 daemon 告警（$(basename "$_f")）"
+            else
+                warn "投 daemon 告警失败（写 $SPOOL 出错？）"
+                rm -f "$_tmp" 2>/dev/null || true
+            fi
+        fi
+    fi
+    echo
+fi
+
 # ------------------------------------------------------------------ #
 # 动作：拉起
 # ------------------------------------------------------------------ #
-if [ "$N_BAD" -eq 0 ]; then
+if [ "$DAEMON_DOWN" = 1 ]; then
+    :   # daemon 不在：跳过整段拉起（上面已解释，N_BAD 必为 0）
+elif [ "$N_BAD" -eq 0 ]; then
     say "★ 全部容器都在跑（或正在自己重启）—— 本脚本没有要做的事。"
 else
     say "★★ 有 $N_BAD 个容器不在跑："
@@ -790,6 +878,11 @@ if [ "$RC" -eq 0 ] && [ "$UNK" -eq 0 ]; then
 elif [ "$RC" -ne 0 ]; then
     echo "★★ 有不通过项（上面 ✗）—— 见上面的排查提示。" >&2
     exit 1
+elif [ "$DAEMON_DOWN" = 1 ]; then
+    echo "★★ docker daemon **不可用**（\`docker info\` 读不出）—— 这是『未验』，不是『没问题』。" >&2
+    echo "   ★ 这一刻所有容器都读不到，**别**当成「容器都停了」。" >&2
+    echo "   ★ 多半是 ContainerManager / dockerd 正在重启；起来后下一趟会自己恢复。" >&2
+    exit 2
 else
     echo "★★ 没有 ✗，但有 ${UNK} 段『查不出』—— 这是『未验』，不是『没问题』。" >&2
     exit 2
