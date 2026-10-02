@@ -900,3 +900,71 @@ daemon 读不出时 ⇒ **未验 rc=2** + 只投**一条** daemon 级告警（ke
 
 ★ **三条都是"推 + build/重建"** —— 属本仓 `A.10`（改 NAS 前先问）。
   **我不擅自动手**；命令我可以给，执行要你点头。
+
+★★ 2026-10-03 **执行时现场更正上表三行的机理**（①②③ **两条都是错的机制**，见 `§32.18`）：
+  三个文件**全是宿主 bind-mount 文件**，`build` 与 `--force-recreate watcher` **都不是**生效手段。
+
+## §32.18 ★★★ 2026-10-03 部署执行 —— `§32.17 七` 三行**两条机制写错了**，当场更正
+
+### 一、先更正 `§32.17 七` 的机理（**这条本身是 B.10 第 14 条**）
+
+上表照"文件 → 生效方式"直觉写了 `build`／`重建 watcher`。**上 NAS 读实况后，两条都错**：
+
+| 上表原写 | 实况（`docker inspect` + 读 compose + 读脚本） | 正确的生效方式 |
+|---|---|---|
+| ① `build drive-loop` | `drive-loop` **根本没有 `build:`**（compose 里是硬约束，见 compose 184-188 行）；镜像靠**本机 build + `docker load`**（NAS 上有 `_drive-loop-img.tar.gz`，46MB）。**且**：容器 `Entrypoint = sh <compose>/drive-loop/run-resident.sh`，`run-resident.sh:94` 的 `SCRIPT="$SELF_DIR/scripts/drive-loop.py"` ⇒ 跑的是**宿主绑挂那份** `drive-loop/scripts/drive-loop.py`，**不是**镜像里的 `/app/...` | **推文件**（`deploy.sh`）+ **重启容器**（脚本在 python 常驻循环里，启动时一次性读入内存）|
+| ③ `--force-recreate watcher` | `watcher` 的 `command = sh scripts/diag/watch-containers-loop.sh`；该循环每轮 `sh "$SELF" ...`（`watch-containers-loop.sh:125`）⇒ **每 600s 重读一次 `watch-containers.sh`** ⇒ 改文件下一轮自动生效 | **推文件即生效**，`--force-recreate` **多余**（无害） |
+
+★ 根因同 `§28 发现三` / `ERR-SVC-19`：**「读数一样、含义相反」** ——
+  "推文件" 与 "build 镜像" 都能说"让新代码生效"，但**量的是两件事**（挂载 vs 烘焙）。
+  ⇒ 判据只有一条：**`docker inspect` 看 `Entrypoint`/`Mounts`**，别凭项目类型猜。
+
+### 二、实际执行（`A.10` 用户已授权后）
+
+```
+1) deploy.sh --apply  →  12 文件（见下），推 + 剥 CR（脚本自动，非 `.cmd/.bat`）
+2) docker compose --profile drive-loop up -d --force-recreate drive-loop
+```
+
+★ **必须先剥 CR**：本机工作树是 **CRLF**（`file` 实测），NAS 是 LF。
+  裸 `diff` 会报 **7443 行**差异（= 3731×2，**每行都"变了"**），**全是行尾假象**。
+  `diff --strip-trailing-cr` 后真实差异才现形：
+
+| 目标（NAS 相对路径） | 裸± | **真实±** | 谁 |
+|---|---|---|---|
+| `scripts/diag/watch-containers.sh` | 105 | **105** | **本轮 `54900fa`** |
+| `notify/notify-spool.sh` | 67 | **67** | **本轮 `97480ec`** |
+| `drive-loop/scripts/drive-loop.py` | 59 | **59** | **`a55d71e`**（部署缺口，邮件 1 的真因）|
+| `drive-loop/orchestrator/state.py` | 7443 | **25** | `a55d71e` **的依赖**（`other_found` 字段）|
+| `orchestrator/state.py` | 7443 | 25 | 同上（构建上下文那份）|
+| `orchestrator/main.py` | 30 | 30 | 早先提交（`§26.65` 口径注释）|
+| `drive-loop/scripts/reseed-state.py` | 1792 | **2** | 早先提交 |
+| `drive-loop/run.sh` / `run-resident.sh` | 340/578 | **0 / 0** | 纯行尾，**无内容变化** |
+| `build-farm.sh` / `nas-update-env.sh` / `rm-staging.sh` | 952/310/580 | **2/0/0** | 纯行尾 |
+
+★★ **`state.py` 不是可选项**：`drive-loop.py:87` 是 `from orchestrator import state as S`，
+  且 `:85 sys.path.insert(0, ROOT)`（`ROOT=drive-loop/`）⇒ 它 import 的正是**绑挂那份**
+  `drive-loop/orchestrator/state.py`。`reconcile-other-found`（`a55d71e`）读的就是这里新加的
+  `other_found` 字段 ⇒ **两者必须同推**，否则 `a55d71e` 一上就 `AttributeError`。
+
+### 三、核验（全回读，2026-10-03 01:57→02:00）
+
+| 检查 | 手段 | 结果 |
+|---|---|---|
+| 三文件落地 | NAS `md5sum` 前后对比 | 4 个文件的 md5 **全变** |
+| 修复标记 | `grep -c` | `reconcile-other-found`=1、`other_found`=4、`非2xx`=6、`DAEMON_DOWN`=7 |
+| 行尾 | `grep -c $'\r'` | **CR=0**（deploy.sh 剥净，无 `ERR-SH-02/03` 风险）|
+| drive-loop 重载 | `attempts.log` + `.drive-loop.state` | 新 `[resident] start`=01:58:27；`started_ts`=01:58:29 ⇒ **新进程** |
+| drive-loop 健康 | `docker ps` | `Up (healthy)`；日志无 traceback；`[第 1 轮] 成功 1 / 失败 0` |
+| watcher 自动接新版 | 手跑 `watch-containers.sh --dry-run` | 新表头齐全；`daemon=（未验：unknown）`、`rc=0` —— ★**这正是新逻辑**（DRY 下不读 daemon ⇒ 报"未验"，**不再**误报"拉不起来"）|
+| spool 无误报 | `ls notify/spool/` | **空** |
+| 仓库未被部署污染 | `git status --short` | **空**（`.deploy-backup/` 已 gitignore）|
+| 门禁 | `gen-counts.py --check` | `[ok] 46 脚本 / 1779 断言`，rc=0 |
+
+### 四、★ 顺带记一条**给 `deploy.sh` 的改进候选**（本轮没改，先记）
+
+`deploy.sh` 结尾按"目标路径前缀"分类给"下一步"（`[A] build` / `[C] 推完即生效`）。
+它把 `drive-loop/*` 归 **`[C] 无需重启`** —— 对 `run.sh` 成立，但对
+**`drive-loop/scripts/drive-loop.py` 不成立**（python 常驻循环，启动读入内存）。
+⇒ 同 `§28`：**静态路径前缀冒充"本次的生效方式"**。本轮靠人（我读了 `run-resident.sh`）补上重启。
+  **未改** deploy.sh（属 A.10 范围外的新增；且分类需更细的判据，留作候选）。
