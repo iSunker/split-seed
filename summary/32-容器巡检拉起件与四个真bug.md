@@ -794,3 +794,109 @@ metrics: fa=0 fb=0
 ★ 按 `--apply` 的分组规则，那 10 个里落进 **[A] 进镜像 ⇒ 必须 build** 的那些要先查清来历
 （`docker-compose.yml` / `orchestrator/*` 都在这一类）——
 **推完不 build 等于没推**，而推了 build 就等于「用一次大部署给本轮改动打掩护」。
+---
+
+## §32.17 ★★★ 2026-10-03 用户拿三封生产邮件来核 —— 逐字对代码 + 上 NAS 读实况
+
+> 起点：用户贴出 `2026-10-03` 三封邮件（观测对账 / 容器拉不起来 / 每日摘要），
+> 要求①逐字对代码、②需要读生产的才上 NAS。用户授权后走了现有 SSH 通道
+> （`ssh -p 36688 -i ~/.ssh/id_ed25519 iSunker@192.168.0.7`，**全程只读**）。
+> ★ 本节把**读数**与**结论**分开写；凡"上过 NAS 才敢说"的都标了命令与原始输出。
+
+### 一、邮件 1「观测对账：一条 Found 都没抓到」⇒ **部署缺口，不是代码 bug**
+
+★ 判据（**从原文 + 本地代码即可定位**）：`a55d71e` 的修复是"`other_found` 非空 ⇒ 另发
+一条 `reconcile-other-found`"。而用户那封信**只有** `reconcile-empty`、**没有**那条
+⇒ **运行镜像是修前的代码**。
+
+★★ **上 NAS 核（Probe 1）**：
+
+```
+docker exec reseed-drive-loop grep -n "reconcile-other-found" /app/scripts/drive-loop.py
+⇒ rc=1（无）
+docker exec reseed-drive-loop sh -c "ls -la /app/scripts/drive-loop.py"
+⇒ -rwxr-xr-x 1 root root 219092 Sep 23 23:52 /app/scripts/drive-loop.py
+docker images drive-loop
+⇒ reseed-drive-loop:0.1.0  1262e100ad78  2026-09-24 00:31:22 +0800 CST
+```
+
+⇒ **定死**：镜像建于 **09-24 00:31**、容器里那份 `drive-loop.py` 是 **09-23 23:52** ——
+比 `a55d71e`（**10-02**）早 **9 天**。**修复没进镜像**（`deploy.sh` 分类里
+`drive-loop.py` 属 **[A] 进镜像 ⇒ 必须 `docker compose build`**，光推文件不生效）。
+
+★ **处置**（**待用户拍**，是写操作）：`cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink &&
+sudo docker compose --profile drive-loop build drive-loop` + 重建容器。
+★ **顺带**：`97480ec`（`§32.17` 七）也在这条链上 —— 一起 build 才生效。
+
+### 二、邮件 2「qbittorrent-reseed 拉不起来」⇒ **真因是 dockerd 重启**（一个新真 bug）
+
+★★★ **上 NAS 读（Probe 2）**，把三封邮件里打架的读数摆平：
+
+| 证据 | 读数 |
+|---|---|
+| `docker inspect qbittorrent-reseed` | `status=running restarts=0 policy=unless-stopped started=2026-10-02T16:19:02Z` |
+| watcher 日志 第 133/134 轮 | `daemon=|`（空）+ 五个容器全 `**不存在** —— 容器根本没创建` |
+| watcher 日志 第 1 轮（**重启后**） | 五个容器全 `status=exited（exit=137/143）` ⇒ 之后 `up -d` **成功** |
+| `ps -o lstart -C dockerd` | **`Sat Oct 3 00:13:54 2026`** |
+| `uptime` | `up 1 day, 20:45` ⇒ **NAS 没重启** |
+
+⇒ **真相**：`2026-10-03 00:13:54` **`dockerd` 自己重启了**（ContainerManager 重载），
+把所有容器一起 SIGKILL/SIGTERM（exit 137/143）。那一刻 `docker info` 读不出、
+`docker inspect` 每个容器都回 `missing` ⇒ watcher 判「容器根本没创建」⇒
+空跑 `up -d`（daemon 都不在）⇒ 投出 **5 条**（qB + 项目 A 四个）**「拉不起来」**告警。
+
+★★ **这 5 条是假的**（含义相反）：那晚**没有任何**有效的拉起尝试；真因是 daemon 不在。
+★ 用户看到的那封**只有 qB**，是因为项目 A 那四条**当天已投过**（冷却）——
+`archive/` 里 **5 条同名文件**（`1790956822000-8953-*`）证明**五条都投了**。
+
+### 三、`host:` 字段 ⇒ **容器 id，不是 NAS**（设计瑕疵，两条合并成一条）
+
+★ `notify.py::_host()` = `socket.gethostname()`，**不可被 env 覆盖**；而
+`watch-containers.sh:757` 又用 `$(hostname)`，脚本跑在 `reseed-watcher` 容器里
+⇒ **必然**打容器 hostname。★ 实锤：告警里 `host: 9daba500ea3b` **正是**
+`reseed-watcher` 的容器 id 前 12 位（`docker inspect` 读到）。
+⇒ 对比摘要邮件 3 的 `host: iSunker-DS423`（那是 `notify-spool.sh` 在**宿主机**上打的）
+—— **同一套链路、两封信 host 语义不同**。多机部署时会误导读信人。
+★ **未修**（本轮只记录）：修它要统一"谁该报主机名"这个口径，属设计决定。
+
+### 四、邮件 3「每日摘要」⇒ **`★失败` 标签会让人把成功率读反**（已修 `97480ec`）
+
+★ 判据：`state.py` 里 `post_webhook` ⇒ `sent++`，`code in (200,202,204)` → `ok++`，
+否则 `failed++`。⇒ `★失败` = **webhook 返回非 2xx 的次数**，**不是**"种子没配上"，
+也**不是** `发出请求` 的一部分；`ok + failed = 发出的总次数`。
+★ 而摘要把 `发出请求 130` 与 `★失败 122` 并排 ⇒ 读成"130 次失败 122 次"。
+⇒ 已改：`发出请求 N` → `成功 N`、`★失败 M` → `非2xx M`（同一把尺子）。
+★ 另：试点提示的 `做种净额 0` 加了口径说明（与台账「做种 443」存量并排不矛盾）。
+★ `包 mbf n/a (n/a)` = **设计正常**（`§26.66`），不是 bug —— 但这个"用户第二次问"
+  说明**渲染对了、读者仍会问**，可考虑在那一行旁加一句（未做，记待办）。
+
+### 五、汇总：用户那张 A/C/D/E 表 —— **全部做完了**
+
+| 条 | 结论 | 证据出处 |
+|---|---|---|
+| **A** `a55d71e` 没进镜像 | ✅ **证实**（rc=1 + 09-23 文件 + 09-24 镜像）| 本节一 |
+| **C** `host:` 语义不一致 | ✅ **证实**（容器 id = watcher 容器）| 本节三 |
+| **D** qB"不在跑" vs 摘要健康 | ✅ **证实**：真因 = `dockerd` 00:13:54 重启 | 本节二 |
+| **E** 4 条容器告警是否修前残留 | ✅ **证伪**：不是 `§32.3③` 残留，是 **daemon-down 导致的新形状**（5 条，含 qB）| 本节二 |
+| **B** `★失败` 标签 | ✅ **已修** `97480ec` | 本节四 |
+
+### 六、★★ 本轮的**新真 bug**（第 8 个）：daemon 不可用被报成"容器拉不起来"（已修 `54900fa`）
+
+★ 机理见本节二。★ 处置：`watch-containers.sh` 新增 `DAEMON_DOWN`，
+daemon 读不出时 ⇒ **未验 rc=2** + 只投**一条** daemon 级告警（key `watch-containers:daemon`）
++ **不**空跑 `up -d` + **不**投逐容器告警。
+★★ **并就地把一条旧判据更正**：门禁里原写「读不出 daemon ⇒ **放行**(rc=0)」——
+  那是**纯本机推理**，生产这次证明它把"最该报的时刻"当成了"没事"。
+  ⇒ 判据现行：读不出 ⇒ rc=2。**这是本轮最该记的方法论**：
+  `§32.15 D` 早写过「上 NAS 验过之后再收紧」，这次正是**生产读数推翻本机判据**的现场。
+
+### 七、★ 部署状态（**待用户拍**，全是写操作）
+
+| # | 事 | 为什么必须用户拍 |
+|---|---|---|
+| ① | `build drive-loop` + 重建 ⇒ 让 `a55d71e`、`97480ec` 生效 | 改运行镜像 |
+| ② | 推 `watch-containers.sh` 最终版上 NAS（仓库 vs NAS 旧版，见 `§32.15 E`）| 推文件 |
+| ③ | 重建 `reseed-watcher` ⇒ 让 `54900fa` 生效 | 重建容器 |
+
+★ **三条都是"推 + build/重建"** —— 属本仓 `A.10`（改 NAS 前先问）。
+  **我不擅自动手**；命令我可以给，执行要你点头。
