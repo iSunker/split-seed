@@ -355,9 +355,15 @@ docker compose run --rm reseed-orchestrator status                          # �
    * `=0` ⇒ **没生效**。★ 先别怀疑代码 —— 按 `§26.15` 查**容器到底读的哪份 `drive-loop.py`**：
      `drive-loop.py` **在镜像里与挂载里各有一份**，只有挂载那份会随 `deploy.sh` 更新。
      ```bash
-     docker compose --profile drive-loop exec drive-loop sh -c 'md5sum /app/scripts/drive-loop.py drive-loop/scripts/drive-loop.py'
+     # 判据只比 notify.py —— ★ 不要拿 drive-loop.py 的两份 md5 相比（那是个恒假的判据，见下）
+     docker compose --profile drive-loop exec drive-loop sh -c 'md5sum /app/scripts/notify.py drive-loop/scripts/notify.py'
      ```
-     两行 **md5 不同** ⇒ 镜像旧，**必须重建镜像并 `docker load`**（`deploy.sh --apply` 治不了）。
+     两行 **md5 相同** ⇒ 镜像不旧；**不同** ⇒ 镜像旧，**必须重建镜像并 `docker load`**（`deploy.sh --apply` 治不了）。
+     ★★ **`drive-loop.py` 不比 md5** —— 它的真源是**挂载那份**（`docker-compose.yml` 的
+     `entrypoint` 覆盖了镜像 `ENTRYPOINT`，`run-resident.sh` 里 `SCRIPT="$SELF_DIR/scripts/drive-loop.py"`
+     指的就是挂载区）。镜像里那份 `/app/scripts/drive-loop.py` 是**死代码**；且它是 **CRLF**，
+     而 `deploy.sh` 会把挂载那份剥成 LF ⇒ **两份 md5 永远不等**。拿它当判据 = **恒假的「狼来了」**
+     （平时假红、真出事也红，没人分得清）。详见 `SUMMARY §26.56` 四。
      `run-resident.sh` 已在启动时自检：读到不含 `PHASE_IDLE` 的旧代码会**退 3** 并在 `attempts.log` 留一行。
 
 5. **「装不出来的单种」那一段有没有真进日报**（`SUMMARY §27`）——

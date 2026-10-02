@@ -139,8 +139,9 @@ if ! grep -q 'PHASE_IDLE' "$SCRIPT" 2>/dev/null; then
   echo "[!!] $SCRIPT 里没有 PHASE_IDLE —— 这是 §26.5 之前的旧版代码。" >&2
   echo "     ★ 不是「没同步」：文件在、但**版本旧**。多半是镜像里 COPY 的旧副本被读到了。" >&2
   echo "     ⇒ 重建镜像并 docker load 到 NAS（见 scripts/drive-loop.Dockerfile 顶部两条纪律），" >&2
-  echo "       或核对挂载有没有盖住 /app。判据（NAS，单行）：" >&2
-  echo "       docker compose --profile drive-loop exec drive-loop md5sum /app/scripts/drive-loop.py drive-loop/scripts/drive-loop.py" >&2
+  echo "       或核对挂载有没有盖住 /app。判据（NAS，单行，★ 只比 notify.py）：" >&2
+  echo "       docker compose --profile drive-loop exec drive-loop md5sum /app/scripts/notify.py drive-loop/scripts/notify.py" >&2
+  echo "       ★ 不要拿 drive-loop.py 的两份 md5 相比：镜像是 CRLF、挂载是 LF ⇒ 恒假（SUMMARY §26.56 四）" >&2
   echo "[$(date '+%F %T')] [resident] exit=3 (stale code: $SCRIPT)" >> "$ATTEMPTS"
   exit 3
 fi
