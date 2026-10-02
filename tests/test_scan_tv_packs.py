@@ -265,6 +265,73 @@ for _nm in ("儿童", "欧美剧"):
 # ★ ⑨⑩⑪ 是**一对反面哨兵**：⑨⑩ 说"有片子别报空"，⑪ 说"真空的必须报" ——
 #   三条一起才说明判据**分得清**这两件事（若为了修误报把 `空目录` 判据整个删掉，⑪ 必红）。
 
+# --------------------------------------------------------------------------- #
+print("\n== 12 ★★ `--emit-roots`：稳的 / 名字存疑两段 + 判不出的不进清单 ==")
+# 判据（用户 2026-10-03 拍）：① 纯 root 行 · ② 分两段 · ③ 不去重（透 scan_pack 的 dups）。
+# ★ 这一段的**价值**在于：`--emit-roots` 吐的清单会**直接粘进 .env**，
+#   粘错了就是"某个包永远不被搜"（静默漏）—— 所以三件事都得钉住。
+_t10 = pathlib.Path(tempfile.mkdtemp())
+mk(_t10, "Arcane.S02.2160p.BluRay-WiKi", files=["Arcane.S02E01.mkv"])
+mk(_t10, "Avatar.S01.2160p.NF.WEB-DL.DV.H.265-DepWeb", files=["Avatar.S01E01.mkv"])
+# 名字不像发布名（有片子、depth=1 对，但搜索名不好用）
+mk(_t10, "LOVELY_RUNNER_01-04", files=["d1.iso"])
+# 判不出 ⇒ **不进清单**
+mk(_t10, "儿童")                                     # 空目录
+mk(_t10, "The.Men.Who.Built.America", dirs=["MEN_D1"])  # 拿不准
+
+_vs = [stp.classify(n, _t10 / n,
+                    siblings=["Arcane.S02.2160p.BluRay-WiKi",
+                              "Avatar.S01.2160p.NF.WEB-DL.DV.H.265-DepWeb",
+                              "LOVELY_RUNNER_01-04", "儿童",
+                              "The.Men.Who.Built.America"])
+       for n in sorted(p.name for p in _t10.iterdir())]
+_txt = stp._emit_roots(_vs, dups=[])
+
+# --- ① 两段切分正确（用段标题上的条数钉，不靠人眼）---
+check("★ 第一段（稳的）标 2 条",
+      "# ---- 第一段：稳的（2 条）----" in _txt, "段标题没对上")
+check("★ 第二段（名字存疑）标 1 条",
+      "# ---- 第二段：名字存疑（1 条" in _txt, "段标题没对上")
+
+# --- ② 稳的在第一段、存疑在第二段（**顺序也钉** —— 分段的全部意义就在这）---
+_i1 = _txt.index("# ---- 第一段")
+_i2 = _txt.index("# ---- 第二段")
+_i3 = _txt.index("# ---- 不进清单")
+check("★ Arcane 落在第一段",
+      _i1 < _txt.index("Arcane.S02.2160p.BluRay-WiKi") < _i2,
+      "落错段了 —— 稳的被分到存疑段")
+check("★ LOVELY_RUNNER 落在第二段",
+      _i2 < _txt.index("LOVELY_RUNNER_01-04") < _i3,
+      "名字不像发布名的没被单独成段 ⇒ 人没法『只贴稳的那段』")
+
+# --- ③ 判不出的**不进清单**（但要留痕，绝不静默丢）---
+check("★★ 空目录没进清单（只在『不进清单』小节里带 # 出现）",
+      "\n" + str(_t10 / "儿童") not in _txt and "#   " + str(_t10 / "儿童") in _txt,
+      "空目录被当成可喂条目了 —— 它没有 depth，喂进去只会出错")
+check("★★ 拿不准的也没进清单",
+      "\n" + str(_t10 / "The.Men.Who.Built.America") not in _txt,
+      "拿不准的被喂进去了 —— 违反 §19.1『判不出别猜』")
+
+# --- ④ 纯 root 行：**必须没有 markdown 表格符**（否则粘进 .env 是脏数据）---
+check("★ 清单是纯 root 行（没有 `| ` 表格符）",
+      "| `" not in _txt, "混进了 markdown —— 粘进 .env 会变成脏行")
+check("★ 每一条可喂行都是绝对路径（`/` 或盘符开头）",
+      all(ln.startswith("/") or (len(ln) > 1 and ln[1] == ":")
+          for ln in _txt.splitlines()
+          if ln and not ln.startswith("#")),
+      "有非路径行混进清单体")
+
+# --- ⑤ 不去重，但 dups **要透出来**（判据只有一份，别在这另写一套）---
+_txt_dup = stp._emit_roots(_vs, dups=["Duplicated.Name", "Duplicated.Name"])
+check("★★ dups 被透出（含去重后的个数说明）",
+      "Duplicated.Name" in _txt_dup and "报重名" in _txt_dup,
+      "dups 没透出来 —— 将来真有重名时会静默丢")
+# ★★ 变异：把 `_emit_roots` 里 stable/dubious 的 `_DUBIOUS_FLAG not in v.flags`
+#    条件对调（即两段互换）⇒ 上面『Arcane 落在第一段』『LOVELY_RUNNER 落在第二段』必红。
+# ★★ 变异：把 `picked is None` 的条目也 append 进 stable ⇒
+#    『空目录没进清单』『拿不准的也没进清单』两条必红。
+# ★★ 变异：把 `_emit_roots` 里 `if dups:` 那段删掉 ⇒ 『dups 被透出』必红。
+
 
 # --------------------------------------------------------------------------- #
 print()

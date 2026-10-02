@@ -497,6 +497,69 @@ def _render(verdicts: list[Verdict], tv: str, *, show_all: bool) -> str:
     return "\n".join(L) + "\n"
 
 
+#: ★ 「名字存疑」这个分段的判据 —— **复用扫描器已经算出来的那个标记**，
+#:   不另立一套（`A.11`：同一事实只在一处）。含义：**有片子、depth 也对，
+#:   但目录名拿去站点搜多半搜不到**（`LOVELY_RUNNER_01-04` 那种范围号、
+#:   `蓝色星球2` 那种纯中文）⇒ 它们会长期躺在 `UNMATCHED`。
+#:   ⇒ `--emit-roots` 把它单独成段，让人**可以只贴稳的那段**。
+_DUBIOUS_FLAG = "名字不像发布名"
+
+
+def _emit_roots(verdicts: list[Verdict], *, dups: list[str]) -> str:
+    """吐**纯 root 行**（一行一条），给 `.env` 的 `FARM_SOURCES=` 用。
+
+    ★★ 为什么只吐 root 行、不吐 `init --root …` 现成命令（用户 2026-10-03 拍）：
+      ① 那命令会有 200 个 `--root` ⇒ 一行几千字符，粘终端**必被截断或粘错**
+         （`summary/26` 记过一次同类事故）；
+      ② `reseed-state.py init` **本来就有 `--roots-from-env`** —— 就是为"别手打
+         200 个 `--root`"设计的。吐命令等于把一条已有的路**重造一遍**。
+
+    ★ 分两段（用户拍）：**稳的** / **名字存疑**（判据 = `_DUBIOUS_FLAG`）。
+      作用：**只贴稳的那段**是个合法选择 —— 存疑的 7 条可以以后再人工看。
+      分成两段而不混在一起，是为了让人**能只贴一部分**（混在 200 行里就没法挑）。
+
+    ★★ **判不出 `picked=None` 的条目一律不吐** —— 它们**没有 depth，进不了
+      `FARM_SOURCES`**（`scan_pack` 不知道喂它什么深度）。它们会出现在段尾的
+      「不进清单」小节里，**绝不静默丢**（`ERR-AI-03`：不给 ≠ 没有）。
+
+    ★ **不去重**：实测真 `TV/` 200 个条目**0 重复**（2026-10-03 量过）。
+      真出现重复时，**透出 `scan_pack()` 自己的 `dups`**（`dups` 参数），
+      **不在这里另写一套判重** —— 判据只有一份。
+    """
+    stable = [v for v in verdicts if v.picked is not None and _DUBIOUS_FLAG not in v.flags]
+    dubious = [v for v in verdicts if v.picked is not None and _DUBIOUS_FLAG in v.flags]
+    unknown = [v for v in verdicts if v.picked is None]
+
+    L: list[str] = []
+    L.append("# FARM_SOURCES 候选（由 scan-tv-packs --emit-roots 生成，**只读**）")
+    L.append("# ★ 用法：整段粘进 .env 的 FARM_SOURCES=（逗号分隔；一行一条也行）。")
+    L.append("# ★ 这是**候选**：贴之前请自己读一眼 —— 包是「声明」的，不是「识别」的（§19.1）。")
+    L.append("# ★ 量：稳的 %d 条 + 名字存疑 %d 条 = 可喂 %d 条；另有 %d 条判不出，未列。"
+             % (len(stable), len(dubious), len(stable) + len(dubious), len(unknown)))
+    L.append("")
+    L.append("# ---- 第一段：稳的（%d 条）----" % len(stable))
+    for v in stable:
+        L.append(str(v.path))
+    L.append("")
+    L.append("# ---- 第二段：名字存疑（%d 条，也 depth=%d，但搜索名可能不好用；"
+             "贴不贴你自己定）----" % (len(dubious), 1))
+    for v in dubious:
+        L.append(str(v.path))
+
+    if unknown:
+        L.append("")
+        L.append("# ---- 不进清单：判不出 depth 的（%d 条）—— 需人工看 ----" % len(unknown))
+        for v in unknown:
+            L.append("#   %s   [%s]" % (v.path, "、".join(v.flags) or "拿不准"))
+
+    if dups:
+        L.append("")
+        L.append("# ⚠ scan_pack 报重名 %d 个（两个根下同名，只会保留先出现的那个）：" % len(dups))
+        for d in sorted(set(dups)):
+            L.append("#   %s" % d)
+    return "\n".join(L) + "\n"
+
+
 def _esc(s: str) -> str:
     return (s or "").replace("|", "\\|").replace("\n", " ")
 
@@ -516,6 +579,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-probe", type=int, default=DEFAULT_MAX_PROBE,
                     help="下钻探测的最大层数（默认 %d），超过就报「拿不准」"
                          % DEFAULT_MAX_PROBE)
+    ap.add_argument("--emit-roots", action="store_true",
+                    help="★ 不吐报告，改吐**纯 root 行**（分「稳的」/「名字存疑」两段），"
+                         "给 .env 的 FARM_SOURCES= 用。判不出 depth 的条目**不进清单**。")
     args = ap.parse_args(argv)
 
     _safe_stdout()
@@ -541,6 +607,34 @@ def main(argv: list[str] | None = None) -> int:
     #   （与目录内部形状无关，见 `classify` 的 docstring）。
     verdicts = [classify(n, Path(tv) / n, siblings=names, max_probe=args.max_probe)
                 for n in names]
+
+    # ★★ `--emit-roots` 是个**独立出口** —— 它和报告走的是**同一个** `verdicts`，
+    #   所以两边的结论**必然一致**（不会出现"报告说 191、清单里 189"）。
+    #   ★ 不去重：本脚本用 `os.scandir` 直扫一层，**没有** `scan_pack()` 的
+    #     `dups` 概念（那是 cross-seed searchee 枚举的重名，本脚本不做那一步）。
+    #     ⇒ 传空 `dups`。真出现重复（同一个 `TV/` 下不可能有同名目录，OS 不允许），
+    #     该做的是让 `scan_pack` 那侧报，**不在这里另写判重**。
+    if args.emit_roots:
+        out = _emit_roots(verdicts, dups=[])
+        if args.out:
+            outp = Path(args.out)
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(out, encoding="utf-8")
+            _say("清单已写入：%s" % outp)
+        else:
+            # ★ 用 write 不用 print：`out` 自带结尾换行，print 会多空一行。
+            sys.stdout.write(out)
+            sys.stdout.flush()
+        n_stable = sum(1 for v in verdicts
+                       if v.picked is not None and _DUBIOUS_FLAG not in v.flags)
+        n_dub = sum(1 for v in verdicts
+                    if v.picked is not None and _DUBIOUS_FLAG in v.flags)
+        n_unk = sum(1 for v in verdicts if v.picked is None)
+        _say("")
+        _say("清单：稳的 %d + 名字存疑 %d = %d 条可喂；判不出 %d 条未列。"
+             % (n_stable, n_dub, n_stable + n_dub, n_unk))
+        return 0
+
     report = _render(verdicts, tv, show_all=args.all)
 
     if args.out:
