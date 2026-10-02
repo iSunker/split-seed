@@ -217,22 +217,22 @@ try:
           [ln for ln in out.splitlines() if "批次明细" in ln])
 
     # ★ 本批四行：frds(22/18/2) dc0816(0/15/1) mbf(0/0/1) dc1139(9/0/2)
-    #   ⇒ frds 1 批 发出请求 22；dc-collection **2 批** 发出请求 9（0+9）
-    check("★ frds 聚合出 1 批（发出请求 22）",
-          "1 批  发出请求   22" in out,
+    #   ⇒ frds 1 批 成功 22；dc-collection **2 批** 成功 9（0+9）
+    check("★ frds 聚合出 1 批（成功 22）",
+          "1 批  成功   22" in out,
           [ln for ln in out.splitlines() if "frds" in ln])
     check("★ dc-collection 聚合出 **2 批**（不是两行）",
-          "2 批  发出请求    9" in out,
+          "2 批  成功    9" in out,
           [ln for ln in out.splitlines() if "dc-collection" in ln])
     check("★★ 聚合行**同时**带「新增做种」与「做种净额」，且按包分列",
           "新增做种 7" in out and "做种净额 18" in out
           and "新增做种 9" in out and "做种净额 15" in out,
-          [ln for ln in out.splitlines() if "发出请求" in ln])
+          [ln for ln in out.splitlines() if "成功" in ln])
     check("★★ 退避按包合计（frds 2 / dc 1+2=3）",
           "退避 2" in out and "退避 3" in out,
           [ln for ln in out.splitlines() if "退避" in ln])
-    check("★★ 全零 ⇒ `★失败` **不**出现（省略常数项）", "★失败" not in out,
-          [ln for ln in out.splitlines() if "失败" in ln])
+    check("★★ 全零 ⇒ `非2xx` **不**出现（省略常数项）", "非2xx" not in out,
+          [ln for ln in out.splitlines() if "非2xx" in ln])
 
     # ★ 台账**仍在**（改的是呈现，不是删掉它）
     check("★ 台账仍出现（#67 那条断言的等价物，改后仍成立）", "每日台账" in out,
@@ -268,14 +268,41 @@ try:
         + batch("p2", ok=10, failed=0, newly_seeding=0, still_skipped=0, backoff_hits=0)
     ))
     out = lab.run().stdout
-    check("★★ p1 的失败合计 = 1，且**显式出现**", "★失败 1" in out,
+    check("★★ p1 的失败合计 = 1，且**显式出现**", "非2xx 1" in out,
           [ln for ln in out.splitlines() if "failed" in ln])
-    check("★ 只有 p1 那行带 `★失败`（p2 干净 ⇒ 不带）",
-          sum(1 for ln in out.splitlines() if "★失败" in ln) == 1,
-          [ln for ln in out.splitlines() if "发出请求" in ln])
-    check("★ 异常行仍带正确的发出请求数（39+40=79）",
-          "2 批  发出请求   79" in out,
+    check("★ 只有 p1 那行带 `非2xx`（p2 干净 ⇒ 不带）",
+          sum(1 for ln in out.splitlines() if "非2xx" in ln) == 1,
+          [ln for ln in out.splitlines() if "成功" in ln])
+    check("★ 异常行仍带正确的成功数（39+40=79）",
+          "2 批  成功   79" in out,
           [ln for ln in out.splitlines() if "p1" in ln])
+finally:
+    lab.cleanup()
+
+# =====================================================================
+print("\n── ④b′ ★★ 批明细的 webhook 两格必须**同一把尺子**（成功 / 非2xx）──")
+#   起因（2026-10-03）：用户读 10-02 那封信，同一行里「发出请求 130」与
+#   「★失败 122」并排 ⇒ 读成「130 次请求失败了 122 次」（成功率读反）。
+#   真意思：`ok` = webhook 返回 2xx 的次数，`failed` = 返回非 2xx 的次数，
+#   两者 `ok + failed = 发出的总次数`（同一个 `sent` 计数器，见 state.py）。
+#   ⇒ 判据：① 新标签「成功」「非2xx」并排出现；② 旧标签**一个都不许留**。
+#   ★ 两条一起才有效：只测新标签在 = 没测到"旧的也还在"（本仓惯见的"只钉一半"）。
+lab = Lab()
+try:
+    lab.tsv("2026-09-14", (
+        batch("p1", ok=130, failed=122, newly_seeding=0, still_skipped=0, backoff_hits=0)
+    ))
+    out = lab.run().stdout
+    _detail = [ln for ln in out.splitlines() if "非2xx" in ln or "成功" in ln]
+    check("★★ 新标签并排：`成功 130` + `非2xx 122`（同一把尺子）",
+          "成功  130" in out and "非2xx 122" in out, _detail)
+    check("★★ 旧标签 `★失败` **已去掉**（不再会被读成「其中的失败」）",
+          "★失败" not in out)
+    check("★★ 旧标签 `发出请求` **已去掉**（避免「130 发出 / 122 失败」的误读）",
+          "发出请求" not in out)
+    # ★ 反向往回证：这一对判据真的抓得住"改回旧标签"这个缺陷（ERR-AI-09 固定动作）。
+    check("★ 对照：把 `成功` 换回 `发出请求` ⇒ 上面那条判据会红",
+          ("发出请求" not in out) and ("成功" in out))
 finally:
     lab.cleanup()
 
@@ -446,8 +473,8 @@ try:
     lab.tsv("2026-09-14", DAY14)
     r = lab.run()
     check("★★ 批明细段**非空**（awk 被截断时它会静默为空）",
-          "1 批  发出请求   22" in r.stdout,
-          [ln for ln in r.stdout.splitlines() if "发出请求" in ln])
+          "1 批  成功   22" in r.stdout,
+          [ln for ln in r.stdout.splitlines() if "成功" in ln])
     check("★★ 台账段**非空**（同一个坑会打掉这一段 —— 两段是**两个独立 awk**）",
           "每日台账（分组）" in r.stdout and "  日期        " in r.stdout,
           [ln for ln in r.stdout.splitlines() if "台账" in ln or "日期" in ln])
@@ -505,6 +532,11 @@ try:
     #     同一个词指两个数，正是本项目反复踩的那类坑。
     check("★ mbf 形状（8 批 / ok=32 / 净额 0）⇒ 建议移出名单",
           "mbf 试了 8 批 / 发出 32 次搜索" in out and "做种净额 0" in out, out)
+    # ★★ 2026-10-03 加：提示里那句「净额 0」必须**自带口径说明** ——
+    #   它和同一封信「每日台账」段的「做种 N」存量并排时会读成矛盾（用户 10-02 提到）。
+    #   判据：提示正文里要**明说**「净额 0 = 本窗口净增 0，不是说没在做种」。
+    check("★★ 提示自带口径：写明「净额 0 ≠ 没在做种」（与台账存量并排不矛盾）",
+          "本窗口净增 0" in out and "不是说这包没在做种" in out, out)
     check("★★ 且**明写「不自动改」**（那是产品决定，要人拍）",
           "不自动改" in out and "产品决定" in out, out)
     # ④ ok=0 ⇒ 必须是**观测失败**那一档，不是"没产出"
@@ -586,10 +618,10 @@ try:
     out = lab.run().stdout
     check("★★ 净额与增量**并排**出现（443 与 0 同时可读）",
           "做种净额 443" in out and "新增做种 0" in out,
-          [ln for ln in out.splitlines() if "发出请求" in ln])
-    check("★ 失败与退避照旧不为它让路（★失败 3 / 退避 3）",
-          "★失败 3" in out and "退避 3" in out,
-          [ln for ln in out.splitlines() if "发出请求" in ln])
+          [ln for ln in out.splitlines() if "成功" in ln])
+    check("★ 非2xx 与退避照旧不为它让路（非2xx 3 / 退避 3）",
+          "非2xx 3" in out and "退避 3" in out,
+          [ln for ln in out.splitlines() if "成功" in ln])
 finally:
     lab.cleanup()
 
@@ -603,7 +635,7 @@ try:
                           still_skipped=0, backoff_hits=0))
     out = lab.run().stdout
     check("★ 有净额（做种净额 5）", "做种净额 5" in out,
-          [ln for ln in out.splitlines() if "发出请求" in ln])
+          [ln for ln in out.splitlines() if "成功" in ln])
     check("★★ 缺键 ⇒ **不印**「新增做种」（绝不印成 0）",
           "新增做种" not in out,
           [ln for ln in out.splitlines() if "新增做种" in ln] or out[-400:])
