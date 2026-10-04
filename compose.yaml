@@ -253,7 +253,7 @@ services:
   # ★ 接线与迁移状态：README「还没做」第 15 条 + `summary/26-...md` §26.5
   # ------------------------------------------------------------------ #
   drive-loop:
-    image: isunker/reseed-toolkit-drive-loop:388ea0d
+    image: isunker/reseed-toolkit-drive-loop:ab3210b
     container_name: reseed-drive-loop
     # ★★ 「生效但不自动上线」的安全锁（`#58` 的 15.a 修复之外的第二条前提）。
     #   带 profile 的服务，`docker compose up -d` **默认不启动**；
