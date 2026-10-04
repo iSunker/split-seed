@@ -43,10 +43,15 @@ try:
 except Exception:
     pass
 
-# 不给仓库根时就按**本脚本的位置**推（仓库根 = scripts/ 的上一级），
+# 不给仓库根时就按**本脚本的位置**推（仓库根 = 本文件的**上上级**），
 # 这样从任意 cwd 跑都一样 —— 同 tests/ 里那些脚本的约定。
+# ★★ 2026-10-05 修一个**静默失效**：本脚本在 `scripts/diag/` 下（不是 `scripts/`）⇒
+#   仓库根是 `__file__` 的**上两级**。旧写法 `.parent.parent` 只到 `scripts/`
+#   ⇒ 默认跑时**只扫 scripts/ 那 37 个文件**，屏幕上照旧打印"零命中" ——
+#   一个字的错都不报，正是本脚本存在的理由（防凭据入库）被它自己绕过。
+#   （与它自己头注里记的那次"中文名被静默跳过"是**同一形状**：错的是取数方式。）
 REPO = (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1
-        else pathlib.Path(__file__).resolve().parent.parent)
+        else pathlib.Path(__file__).resolve().parent.parent.parent)
 ENV = REPO / ".env"
 FILES = sys.argv[2:]
 

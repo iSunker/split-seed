@@ -154,9 +154,17 @@ if YML and isinstance(svcs.get("drive-loop"), dict):
     ck("★ ①d drive-loop 不写 build:（NAS 的构建上下文是 compose 目录，写了会炸）",
        "build" not in dl, repr(dl.get("build")))
 
-    # ---- ①e image 已 load 的那个 tag --------------------------------------
-    ck("①e image = reseed-drive-loop:0.1.0（已 build + 已 load 到 NAS 的那个标）",
-       dl.get("image") == "reseed-drive-loop:0.1.0", repr(dl.get("image")))
+    # ---- ①e image = Docker Hub 上的 reseed-toolkit-drive-loop ------------------
+    # ★★ 2026-10-05（B5，push/pull）：镜像改从 **Docker Hub** 拉（`isunker/reseed-toolkit-drive-loop`，
+    #   tag=git 短 sha）。判据不写死具体 sha（每次发版都变）⇒ 断言**前缀 + 仓库名**，
+    #   并**反向**断言不再是旧的本地 tag（回滚到本地 build 那套会当场红）。
+    _img = dl.get("image") or ""
+    ck("①e image = Docker Hub isunker/reseed-toolkit-drive-loop:<sha>",
+       _img.startswith("isunker/reseed-toolkit-drive-loop:")
+       and _img != "isunker/reseed-toolkit-drive-loop:",
+       repr(_img))
+    ck("①e2 且不再是旧的本地 tag（pull 模型，NAS 不 build）",
+       _img != "reseed-drive-loop:0.1.0", repr(_img))
 
     # ---- ①f logging 锚点没漏（漏了 = 无上限日志，/volume1 只剩约 20 GB）----
     _lg = dl.get("logging")
