@@ -76,6 +76,23 @@ COPY data/drive-loop/scripts/build-farm.sh   /app/scripts/build-farm.sh
 #   ⇒ "挂载那份盖住镜像"这条病根（§26.15 packpct=0）从结构上消失。
 COPY data/drive-loop/run-resident.sh /app/run-resident.sh
 
+# ★★ 2026-10-05（B6 上线实测踩到）：**剥掉 CRLF**。
+#   镜像的构建上下文是**本机工作树**，而本仓工作树是 **CRLF**（git 里存 LF，
+#   `.gitattributes` 是 `text=auto eol=lf`）⇒ `COPY` 进来的 shell 脚本带 `\r`。
+#   症状（NAS 实测）：容器**无限重启**，`docker logs` 只有一行
+#       `/app/run-resident.sh: 87: set: Illegal option -`
+#   —— `sh`(dash) 把 `set -eu\r` 的 `\r` 当成了一个**非法选项字符**。
+#   ★ 为什么以前没暴露：代码此前是**挂载**进去的（SMB 同步会归一化行尾），
+#     改成"代码入镜像"后**第一次**由 `COPY` 直接把工作树字节搬进镜像 ⇒ 踩中。
+#   ★ 判据（能被证伪）：`docker run --rm --entrypoint sh <img> -c 'cat -A /app/run-resident.sh | grep -c "\^M"'` == 0。
+#   只对 shell 脚本做（python 不在乎行尾，但一并剥掉更一致、也少一个口径）。
+RUN for f in /app/run-resident.sh /app/scripts/*.sh /app/scripts/*.py; do \
+        [ -f "$f" ] && sed -i 's/\r$//' "$f"; \
+    done; \
+    if grep -rlU $'\r' /app/run-resident.sh /app/scripts/ 2>/dev/null | grep -q .; then \
+        echo "CRLF 未清干净"; exit 1; \
+    fi
+
 # 默认只打印用法，不真跑（真跑用 `docker compose run --rm drive-loop …`）
 ENTRYPOINT ["python", "/app/scripts/drive-loop.py"]
 CMD ["--help"]
