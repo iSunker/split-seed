@@ -45,29 +45,35 @@ DST="${DST:?请设置 DST（NAS 上的 compose 目录），例如 DST=//my-nas/d
 BACKUP_ROOT="$SRC/.deploy-backup"
 
 # <本地相对路径>::<生产相对路径>
-# 注意 compose 文件两边命名不同: 本地 docker-compose.yml → 生产 compose.yaml
+# ★ 2026-10-05（B2）：本地 compose 已改名 `docker-compose.yml` → `compose.yaml`，
+#   与生产**同名** ⇒ 映射变成 `compose.yaml::compose.yaml`（不再是跨名映射）。
 FILES=(
-  "docker-compose.yml::compose.yaml"
-  "cross-seed/config.js::cross-seed/config.js"
+  "compose.yaml::compose.yaml"
+  "data/cross-seed/config.js::cross-seed/config.js"
   # ★ 2026-10-01：cross-seed 的**启动闸门**（`command: ["sh", "/config/wait-for-qb.sh"]`）。
-  #   它在容器内是 `/config/wait-for-qb.sh`（./cross-seed 挂到 /config），故必须随本白名单
+  #   它在容器内是 `/config/wait-for-qb.sh`（./data/cross-seed 挂到 /config），故必须随本白名单
   #   一起上 NAS —— 否则 compose 里引用的那个文件**不存在** ⇒ 容器起不来（`no such file`）。
   #   与上面 config.js 同一种"挂载目录里的文件"（同一条：动它之后 `--force-recreate`）。
-  "cross-seed/wait-for-qb.sh::cross-seed/wait-for-qb.sh"
-  "hlink/config.yml::hlink/config.yml"
+  #   ★ 2026-10-05（B2）：本地源路径加 `data/` 前缀（生产相对路径不变）。
+  "data/cross-seed/wait-for-qb.sh::cross-seed/wait-for-qb.sh"
+  "data/hlink/config.yml::hlink/config.yml"
   ".dockerignore::.dockerignore"
-  #   （仓库里在 scripts/，生产在 compose 根目录，两边靠人记得同步）。
-  #   代价实测过：09-11 那次改完 --verify 的期望集，生产副本是另外手工放的，
-  #   中间有一段时间两边内容不一致，而且手工放的没有备份。
-  #   进白名单后：改完 deploy.sh --apply 就同步，且自动进 .deploy-backup/ 可回滚。
-  #   路径映射注意：仓库 scripts/build-farm.sh → 生产 **compose 根目录**（不是 scripts/），
-  #   因为它要跟 .env 同目录才找得到配置。
-  "scripts/build-farm.sh::build-farm.sh"
+  # 农场清单维护脚本 build-farm.sh。
+  #   ★ 2026-10-05（B2）：它**同时**进镜像（`/app/scripts/build-farm.sh`，供代码调用）
+  #     **和** compose 根目录 —— 因为 `drive-loop.py::_run_verify()` 用
+  #     `first_existing("build-farm.sh")` 在 **CROSSSEED_DIRS（= 挂载的 compose 根）**
+  #     里找它，找不到就**静默跳过农场巡检**（一条 warning，不退非零）。
+  #     ⇒ 两处都要有，且 must 一致。源路径随 data/ 收拢改成 `data/drive-loop/scripts/`。
+  #   ★ 原先它靠"手工拷上去"，代价实测过（09-11 那次改完 --verify 的期望集，生产副本
+  #     是另外手工放的，两边一度不一致、且没有备份）。进白名单后改完 `--apply` 就同步、
+  #     自动进 `.deploy-backup/` 可回滚。
+  "data/drive-loop/scripts/build-farm.sh::build-farm.sh"
   # ★ 2026-09-12 晚补：这两个原先**靠手工拷**，是同一族问题的最后两个。
   #   查"git 提交是不是一半 NAS 一半本地"时量出来的 —— 白名单之外的文件
   #   **没有任何机制保证两边一致**（build-farm.sh 就是前车之鉴，见上）。
   #   实测收进来时两边已一致，所以这次是**零风险**地把"靠记性"换成"靠 cmp"。
   #
+  #   ★ 2026-10-05（B2）：下面三个仍是**本机 `scripts/`（根）** 的源码/生成物（不在 data/）。
   #   fix-statedb-farm-root.py —— 仓库里是 scripts/ 下的**已跟踪源码**，
   #     生产副本却放在 compose **根目录**（和数据修复时手边方便有关）。
   #   nas-update-env.sh —— 是**生成物**（scripts/gen-nas-env-update.py 产出，
@@ -106,12 +112,13 @@ FILES=(
   #      且**没有任何读数会报**（这正是本仓最怕的形状）。
   #
   #   ★ 映射到 `scripts/diag/`（**不是** compose 根）：因为 compose 里
-  #     `command: ["sh", "scripts/diag/watch-containers-loop.sh"]`
-  #     与 `working_dir: /volume2/.../<compose>` ⇒ 相对路径就是 `scripts/diag/`。
+  #     `command: ["sh", "data/scripts/diag/watch-containers-loop.sh"]`
+  #     与 `working_dir: /volume2/…/reseed` ⇒ 相对路径就是 `data/scripts/diag/`
+  #     （★ 2026-10-05 收进 data/ 后，脚本的生产相对路径也加了 `data/` 前缀）。
   #     （`chk58.sh` 等"人手动跑"的件仍在 `KNOWN_NAS`、**不在**这里 ——
   #       判据是「**容器/自动机制会不会读它**」，不是"它是不是诊断件"。）
-  "scripts/diag/watch-containers.sh::scripts/diag/watch-containers.sh"
-  "scripts/diag/watch-containers-loop.sh::scripts/diag/watch-containers-loop.sh"
+  "data/scripts/diag/watch-containers.sh::data/scripts/diag/watch-containers.sh"
+  "data/scripts/diag/watch-containers-loop.sh::data/scripts/diag/watch-containers-loop.sh"
 )
 
 MODE="${1:---dry-run}"

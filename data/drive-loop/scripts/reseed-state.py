@@ -52,7 +52,19 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import state as S  # noqa: E402
 
-DEFAULT_DB = os.environ.get("RESEED_STATE_DB", str(REPO / "hlink" / "state.db"))
+# ★★ 2026-10-05（B2，代码入镜像）：sidecar 状态库的位置**不再靠 `REPO/hlink/`** ——
+#   镜像里 REPO=/app，而 `hlink/state.db` 是**运行时**产物（挂在 `/state`），
+#   不在镜像层里。⇒ 与 `drive-loop.py` 的 `STATE_DIR` 同一套约定：
+#     ① `RESEED_STATE_DB`（显式全路径）最优先；
+#     ② 否则 `DRIVE_STATE_DIR/hlink/state.db`；
+#     ③ 都没有才回退 `REPO/hlink/state.db`（本机开发/旧行为）。
+#   ★ 顺序的理由：显式路径 > 环境约定的状态目录 > 反推 —— 反推在镜像里必错，
+#     而错的后果是 `StateStore` 在**只读层**上 mkdir 失败或建空库（见 state.py 那段）。
+_STATE_DIR = os.environ.get("DRIVE_STATE_DIR")
+DEFAULT_DB = os.environ.get("RESEED_STATE_DB") or (
+    str(Path(_STATE_DIR) / "hlink" / "state.db") if _STATE_DIR
+    else str(REPO / "hlink" / "state.db")
+)
 
 
 def _say(*a) -> None:

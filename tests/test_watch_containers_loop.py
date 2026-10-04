@@ -55,8 +55,8 @@ import sys
 import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-LOOP = REPO / "scripts" / "diag" / "watch-containers-loop.sh"
-WATCH = REPO / "scripts" / "diag" / "watch-containers.sh"
+LOOP = REPO / "data" / "scripts" / "diag" / "watch-containers-loop.sh"
+WATCH = REPO / "data" / "scripts" / "diag" / "watch-containers.sh"
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -311,7 +311,7 @@ print("\n── ⑥ ★ 静态判据：**没有**「同一行里既判 rc 又 ex
 #   rc 组合（还要造出每种 rc 的现场）⇒ 直接看源码形状更省。
 # ★★ 判据写的**是那个形状本身**：「同一行里既有 rc 判断、又有 exit」——
 #   那正是"按 rc 退出"（= 会变成重启风暴）的写法。
-_src = (REPO / "scripts" / "diag" / "watch-containers-loop.sh").read_text(encoding="utf-8")
+_src = (REPO / "data" / "scripts" / "diag" / "watch-containers-loop.sh").read_text(encoding="utf-8")
 
 
 def _has_rc_guarded_exit(src: str) -> bool:

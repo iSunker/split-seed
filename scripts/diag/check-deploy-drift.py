@@ -313,7 +313,7 @@ LOCAL_ONLY = [
     #   把它加进 deploy.sh 的 FILES，**并从本清单里移除**（两处必须同时改，
     #   只改一处就会被 B 方向当场报出来 —— 这正是这份清单存在的意义）。
     (r"^scripts/diag/drive-loop-docker\.sh$",          "**已作废**（#58 的 docker run 草案）—— 取代它的是 compose.yaml 里的 drive-loop 服务；保留为推导记录（挂载清单 + 三条容器方言），**不部署**"),
-    (r"^prowlarr/\.gitkeep$",                     "占位符；生产的 prowlarr/ 是**不许碰**的"),
+    (r"^data/prowlarr/\.gitkeep$",                "占位符；生产的 prowlarr/ 是**不许碰**的（2026-10-05 随 data/ 收拢）"),
     (r"^scripts/diag/(add-indexers|add-torznab-indexer|check-indexer-timestamps"
      r"|gen-datadirs|gen-nas-env-update|migrate-reseed-dirs|run-batch|wait-for-checks)"
      r"\.(py|sh)$",                               "在 Windows 上跑的工具/生成器（对着 NAS 的端口或 UNC 干活）"),
@@ -361,7 +361,9 @@ LOCAL_ONLY = [
     #     而 NAS 上的构建上下文是 **compose 目录** —— 两边的相对路径不同，
     #     直接拷过去也 build 不起来（`COPY scripts/…` 在 NAS 上找不到 orchestrator/）。
     #     ⇒ 真要上 NAS，得连构建方式一起设计，不是"加进 FILES"就完事。
-    (r"^scripts/drive-loop\.Dockerfile$",        "#58 镜像定义（未部署；且本仓/NAS 的 build 上下文不同，不能直接拷）。★ 2026-09-18：它**留在 `scripts/` 没进 `diag/`** —— 它是镜像定义不是诊断工具，别跟着那次分区一起挪"),
+    # ★ 2026-10-05：drive-loop.Dockerfile 已随 data/ 收拢 → `data/drive-loop/Dockerfile`，
+    #   且归入上面的 IMAGE_ONLY（它是**镜像定义**，本机构建，不走 deploy FILES）。
+    #   ⇒ 这一条 LOCAL_ONLY 规则随之删除（否则成死规则）。
     # ==========================================================================
     # ★ 2026-09-17 补登记**本来就在库里、却一直没登记**的 —— 哨兵这些天一直红着。
     #   而**「常红」等于「没有哨兵」**：天天红的东西没人看，真报出来的新漂移会被淹掉。
@@ -479,6 +481,21 @@ LOCAL_ONLY = [
     #     ★★ 这条**留在注释里而不是删掉**：因为它是"同一个文件、两个相反结论"的现场 ——
     #       下一个人看到 `chk58.sh` 在 KNOWN_NAS、`watch-containers.sh` 在 FILES，
     #       会以为前者漏登了。理由必须在场。
+]
+
+# ★★ 2026-10-05（B2/B3，「代码入镜像」模型）：**由镜像携带**的已跟踪源码。
+#   判据：既**不**进 `deploy.sh` 的 FILES（代码不再靠文件同步上 NAS），
+#   也**不**是"本机专属不部署"（它们在**容器里跑** —— 只是**走镜像**不是走文件）。
+#   ⇒ 与 LOCAL_ONLY 分开列，语义不同：LOCAL_ONLY = "生产上根本没有它"；
+#     IMAGE_ONLY = "生产上有它，但它是 build 进镜像的，文件同步碰不到它"。
+#   ★ 为什么不把它们塞进 FILES：那正是 §26.15 的病根（一份代码两个真源、会漂）。
+#     改这些文件 ⇒ `docker build` + `docker push` + NAS `docker compose pull`。
+IMAGE_ONLY = [
+    (r"^data/orchestrator/",                      "编排器源码（build 进 reseed-orchestrator 镜像）"),
+    (r"^data/drive-loop/scripts/",                "drive-loop 源码（build 进 reseed-drive-loop 镜像）"),
+    (r"^data/drive-loop/run-resident\.sh$",       "drive-loop 容器内常驻入口（build 进镜像 = /app/run-resident.sh）"),
+    (r"^data/drive-loop/Dockerfile$",             "drive-loop 镜像定义（本机构建）"),
+    (r"^data/drive-loop/run\.sh$",                "drive-loop 宿主 --once 入口（DSM 任务计划调，手工放 NAS；不走 deploy FILES）"),
 ]
 
 # 受管、但**不在 git 里**的本地源（正常情况只有生成物）。没列在这里的会被 B 方向报出来 ——
@@ -780,13 +797,20 @@ def main():
             rows.append(("managed", rel, None))
             continue
         why = next((w for rx, w in LOCAL_ONLY if re.search(rx, rel)), None)
-        rows.append(("local", rel, why) if why else ("unknown", rel, None))
+        if why:
+            rows.append(("local", rel, why))
+            continue
+        # ★★ 2026-10-05：**镜像携带**的源码（既不进 FILES，也不是"不部署"）。
+        img = next((w for rx, w in IMAGE_ONLY if re.search(rx, rel)), None)
+        rows.append(("image", rel, img) if img else ("unknown", rel, None))
 
     n_m = sum(1 for k, _, _ in rows if k == "managed")
     n_l = sum(1 for k, _, _ in rows if k == "local")
+    n_i = sum(1 for k, _, _ in rows if k == "image")
     n_u = sum(1 for k, _, _ in rows if k == "unknown")
     print(f"       已跟踪 {len(tracked)} 个文件：")
     print(f"         ✓ 会部署（在 FILES 里）     {n_m:>6}")
+    print(f"         ✓ 走镜像（IMAGE_ONLY）      {n_i:>6}")
     print(f"         ✓ 明确不部署                {n_l:>6}")
     print(f"         ★ 未登记                    {n_u:>6}")
 

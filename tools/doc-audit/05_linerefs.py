@@ -65,9 +65,16 @@ SKIP_DIRS = {".git", ".deploy-backup", ".claude", "__pycache__",
 #:   ⇒ 判据不能只看"仓库里有没有"（同 `B.10` 第 1 条：「某台机器上没有」≠「环境里都没有」）。
 #: ★ 维护方式：**只在两侧不同名时才需要登记**。`deploy.sh` 里同名的那一堆不用列。
 DEPLOY_ALIASES = {
-    "compose.yaml": "docker-compose.yml",
-    "run.sh": "scripts/drive-loop-nas.sh",
-    "run-resident.sh": "scripts/drive-loop-resident.sh",
+    # ★★ 2026-10-05（B2/B3）：本地 compose 已改名 `docker-compose.yml` → `compose.yaml`。
+    #   索引按**文件名**建键 ⇒ 旧文档（`summary/*` 等历史记录）里引的
+    #   `docker-compose.yml:NNN` 会找不到文件。★ 那些是**过程记录、不追改**
+    #   （`A.11`）⇒ 用别名把它们**指向现在的本地文件**（同一份，只是改了名），
+    #   让行号判据仍能对其生效。
+    "docker-compose.yml": "compose.yaml",
+    # NAS 侧的部署名（`deploy.sh` 的 FILES 映射）—— 文档引它们时仓库里可能不同名。
+    # ★ 2026-10-05：源文件已随 data/ 收拢到 `data/drive-loop/`；别名给**新路径**。
+    "run.sh": "data/drive-loop/run.sh",
+    "run-resident.sh": "data/drive-loop/run-resident.sh",
 }
 
 
@@ -87,7 +94,7 @@ def build_index(root: Path) -> dict:
             continue
         if any(part in SKIP_DIRS for part in p.parts):
             continue
-        if p.suffix.lower() not in (".py", ".sh", ".md", ".yml", ".js", ".tsv"):
+        if p.suffix.lower() not in (".py", ".sh", ".md", ".yml", ".yaml", ".js", ".tsv"):
             continue
         idx.setdefault(p.name, []).append(p)
     return idx
@@ -148,6 +155,41 @@ KNOWN_STALE = {
     #   正文不许改（`A.11`「过程记录不追改」）⇒ 记在这里。
     ("31-测试计数的口径与历史.md", "README.md:1225"):
         "整段搬来的读数史：原行号留档，正文不改（A.11 过程记录不追改）",
+
+    # ★★ 2026-10-05（Task C：通知模块剥离）：`notify.py` / `notify-spool.sh` 已从仓库
+    #   **删除**（整体剥离到独立项目，见 `重构方案.md` §11）⇒ 所有引用它们的行号引用
+    #   都成了 NO-FILE。这些引用**全在历史记录里**（`summary/*` = 会话存档；
+    #   `ENVIRONMENT.md` 里那两条也是"当时的现场记录"）—— **正文不许改**
+    #   （`A.11`「过程记录不追改」）⇒ 逐条登记。
+    #   ★ 键 = (文档, "目标:行号")，与上表同格式（代码里 `r[2]` 含行号）。
+    ("18-目录布局调整.md", "notify-spool.sh:334"):
+        "历史存档：notify-spool.sh 已随通知模块剥离而删除（Task C）；正文不追改",
+    ("20-观测层语义收敛.md", "notify.py:95"):
+        "历史存档：notify.py 已随通知模块剥离而删除（Task C）；正文不追改",
+    ("23-卷归属复核与SMB探针分辨力.md", "notify.py:198"):
+        "历史存档：notify.py 已删除（Task C）；正文不追改",
+    ("23-卷归属复核与SMB探针分辨力.md", "notify-spool.sh:713"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("23-卷归属复核与SMB探针分辨力.md", "notify-spool.sh:738"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "notify.py:97"):
+        "历史存档：notify.py 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "notify-spool.sh:163"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "notify-spool.sh:65"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "notify-spool.sh:72"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "notify-spool.sh:746"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "notify-spool.sh:866"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "scripts/notify.py:233"):
+        "历史存档：notify.py 已删除（Task C）；正文不追改",
+    ("26-跨会话任务盘面与旧会话清场.md", "scripts/notify-spool.sh:850"):
+        "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
+    ("ENVIRONMENT.md", "notify-spool.sh:671"):
+        "现场记录：notify-spool.sh 已删除（Task C）；该处是当时的操作留档，正文不追改",
 }
 
 

@@ -20,13 +20,16 @@ except Exception:
     pass
 
 REPO = pathlib.Path(__file__).resolve().parent.parent  # 仓库根
-SRC = str(REPO / "scripts" / "drive-loop.py")
+SRC = str(REPO / "data" / "drive-loop" / "scripts" / "drive-loop.py")
 
 spec = importlib.util.spec_from_file_location("drive_loop", SRC)
 dl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dl)
 
 S = sys.modules["orchestrator.state"] if "orchestrator.state" in sys.modules else None
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码都在 data/ 下。
+#   先无条件把 data/ 加进搜索路径（下面那个 `if` 只是"还没导入就再补仓库根"）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 if S is None:
     sys.path.insert(0, str(REPO))
     from orchestrator import state as S

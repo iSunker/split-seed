@@ -44,8 +44,8 @@ except Exception:
     pass
 
 # ★ 默认路径就是现场那个；挂不上就报 ERROR 而不是崩。
-LOG = ("//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
-       "/drive-loop/scripts/drive-loop.log")
+LOG = ("//iSunker-DS423/docker_ssd/reseed"
+       "/data/drive-loop/state/drive-loop.log")
 
 #: ★ 部署时刻（UTC）。这是 #115 的**分界线**：之前的批次跑的是老代码，
 #:   把它们算进来会得出"FAIL"——而那个 FAIL 是**历史**，不是本次部署的结论。

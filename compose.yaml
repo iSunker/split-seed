@@ -58,8 +58,9 @@ services:
       - PGID=${PGID}
       - TZ=${TZ}
     volumes:
-      # ./ = compose 文件所在目录 = /volume2/docker_ssd/prowlarr_cross-seed_autohardlink
-      - ./prowlarr:/config
+      # ./ = compose 文件所在目录 = NAS compose 根（改名后 /volume2/docker_ssd/reseed）；
+      # ★ 2026-10-05（B2）：容器相关目录已收进 `data/` ⇒ 挂载源加 `data/` 前缀。
+      - ./data/prowlarr:/config
     ports:
       - "9696:9696"
     networks: [reseed-net]
@@ -113,7 +114,7 @@ services:
     #   ★ 改这里**必须 `--force-recreate`** 才生效（`entrypoint:` 变了，见 `ERR-DOCKER-01`）。
     entrypoint: ["/bin/sh", "/config/wait-for-qb.sh"]
     volumes:
-      - ./cross-seed:/config
+      - ./data/cross-seed:/config
       # ★大包源数据 + 建链接目录：两者必须在同一物理卷，且此处 1:1 挂载
       - /volume1/video:/volume1/video
     ports:
@@ -127,7 +128,7 @@ services:
   reseed-orchestrator:
     build:
       context: .
-      dockerfile: orchestrator/Dockerfile
+      dockerfile: data/orchestrator/Dockerfile
     image: reseed-orchestrator:0.1.0
     container_name: reseed-orchestrator
     user: "${PUID}:${PGID}"
@@ -142,15 +143,16 @@ services:
       #   `state` 子命令读 qB 时也走 `state._qbit_*` ⇒ 一并带上。
       - QB_API_KEY=${QB_API_KEY:-}
     volumes:
-      # 编排器(autohardlink)的配置目录 = ./hlink；把 config.yml 放进 hlink/ 即可。
+      # 编排器(autohardlink)的配置目录 = ./data/hlink；把 config.yml 放进 hlink/ 即可。
       # 注意：这里只放"配置/日志"等元数据，真正的硬链接数据在 LINK_DIR(/volume1/video 下)。
-      - ./hlink:/config
-      # ★ 2026-09-12 下午加：状态库**不在** /config 里 —— ./hlink 是编排器自己的配置目录
-      #   （只有 config.yml），而 drive-loop 真正在写的那份在 <compose>/drive-loop/hlink/。
+      - ./data/hlink:/config
+      # ★ 2026-09-12 下午加：状态库**不在** /config 里 —— ./data/hlink 是编排器自己的配置目录
+      #   （只有 config.yml），而 drive-loop 真正在写的那份在 <compose>/data/drive-loop/state/hlink/。
+      #   ★ 2026-10-05（B2）：运行态统一收进 `data/drive-loop/state/` ⇒ 这条挂载源随之改。
       #   ★ 挂成 **ro**：`state` 只读；而 StateStore 打开库时会跑一遍 schema 迁移
       #   （`ALTER TABLE ...`），rw 挂载等于让一个"只读"子命令**有写坏生产库的能力**。
       #   ro 把这条可能性直接掐掉，顺带也是给 `state` 的语义做背书。
-      - ./drive-loop/hlink:/state:ro
+      - ./data/drive-loop/state/hlink:/state:ro
       # 预检要 stat 源目录/校验同卷；prestage 要建链接 → 同样 1:1 挂载媒体卷
       - /volume1/video:/volume1/video
     depends_on: [cross-seed]
@@ -279,7 +281,7 @@ services:
     healthcheck:
       test: ["CMD", "python", "-c",
              "import json,sys,time;st=json.load(open(sys.argv[1],encoding='utf-8'));hb=float(st.get('heartbeat_ts') or 0);sys.exit(0 if hb and time.time()-hb<=1800 else 1)",
-             "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/scripts/.drive-loop.state"]
+             "/state/.drive-loop.state"]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -317,13 +319,33 @@ services:
       #   ★ `env_file: [.env]` 其实已经带进来了，这里显式写一条是**为了能被搜到/读见**。
       #   ★ 空值也 OK：没有 key 时行为与改动前逐字相同（白名单模式不受影响）。
       - QB_API_KEY=${QB_API_KEY:-}
+      # ★★ 2026-10-05（B2/§8.3，代码入镜像）：代码改从**镜像**读 ⇒ 路径来源由
+      #   「`$0` 反推 compose 目录」改为下面三条**显式环境变量**（详见 `drive-loop.py`
+      #   的 STATE_DIR 段 / `run-resident.sh` 的文件头）。三者的**含义与取值**：
+      #     · DRIVE_STATE_DIR —— 运行态目录（6 个 `.state` + attempts.log + drive-loop.log
+      #       + `hlink/state.db`）。挂在 `/state` ⇒ 取值 `/state`。
+      #     · COMPOSE_DIR     —— cross-seed compose 根（`CROSSSEED_DIRS` 读它找
+      #       `cross-seed.db` / `info.current.log` / `build-farm.sh` / `.env`）。
+      #       ★ 改名后的新根 = `/volume2/docker_ssd/reseed`。
+      #     · RESEED_STATE_DB —— sidecar 状态库全路径（编排器的 `state` 子命令读同一份）。
+      #   ★ 改这三者**不用重建镜像** —— 它们是运行时注入；而**改了 drive-loop 代码**
+      #     才要重建（见 `.claude/rules`「代码定位」）。
+      - DRIVE_STATE_DIR=/state
+      - COMPOSE_DIR=/volume2/docker_ssd/reseed
+      - RESEED_STATE_DB=/state/hlink/state.db
     volumes:
-      # ① compose 目录，**同名同路径**（见上面「挂载为什么是整目录 1:1」）
-      #    ★ 用绝对路径字面量，**不用 `./`** —— `./` 解析到容器内不存在的宿主路径，
-      #      而这里要求两边**逐字相同**。
-      - /volume2/docker_ssd/prowlarr_cross-seed_autohardlink:/volume2/docker_ssd/prowlarr_cross-seed_autohardlink
-      # ② 媒体卷，同理必须同名同路径；而且 **§9：硬链接不能跨卷** ⇒
-      #    农场与源数据必须同一条设备，所以这个挂载**只能是整卷**
+      # ★★ 2026-10-05（B2/§8.3）：挂载清单按「代码入镜像」模型重写（原来是整目录 1:1）。
+      #   ① compose 根：**只读**挂进来（代码不再取自这里 ⇒ 不必可写）。
+      #      用途 = 让 `CROSSSEED_DIRS` 读到 cross-seed.db / info.current.log /
+      #      build-farm.sh / .env（`first_existing()` 那四处）。★ 用绝对路径字面量
+      #      （= 新根），**不用 `./`** —— 要求宿主路径与容器内路径**逐字相同**。
+      - /volume2/docker_ssd/reseed:/volume2/docker_ssd/reseed:ro
+      #   ② 运行态卷：6 个 `.state` + attempts.log + drive-loop.log + `hlink/state.db`
+      #      都是**运行时产物**，必须挂一个**可写**目录（镜像层只读，写不进去）。
+      #      ★ 容器内 = `/state`，与上面 `DRIVE_STATE_DIR` 一致。
+      - ./data/drive-loop/state:/state
+      #   ③ 媒体卷，同名同路径；**§9：硬链接不能跨卷** ⇒ 农场与源数据必须同一条设备，
+      #      所以这个挂载**只能是整卷**。
       - /volume1/video:/volume1/video
       # ③ 时区：挂 NAS 的 `/etc/localtime`（2026-09-21 加）
       #    ★★★ 2026-09-22 **更正起因**：原先这里写「日志时间戳比真实时间快 8 小时」，
@@ -359,9 +381,11 @@ services:
     #     它的 entrypoint 是 `python -m orchestrator.main`，`daemon` 是**子命令参数**；
     #     而这里要的是**整条替换**，所以用 `entrypoint:`。
     #
-    # ★ 路径写成**绝对**的：镜像的 `WORKDIR` 是 `/app`，相对路径 `drive-loop/…`
-    #   在 `/app` 下**不存在**。挂载点是 1:1 同名同路径 ⇒ NAS 路径 == 容器内路径。
-    entrypoint: ["sh", "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/run-resident.sh"]
+    # ★ 路径写成**绝对**的：镜像的 `WORKDIR` 是 `/app`。
+    # ★★ 2026-10-05（§8.3，代码入镜像）：入口**从镜像里取** —— `/app/run-resident.sh`
+    #   由 `drive-loop.Dockerfile` 的 `COPY data/drive-loop/run-resident.sh /app/run-resident.sh`
+    #   带进镜像。⇒ 不再从挂载区读（"挂载盖住镜像"那条病根消失）。
+    entrypoint: ["sh", "/app/run-resident.sh"]
     networks: [reseed-net, qbit-net]
     logging: *logging-limits
 
@@ -493,7 +517,7 @@ services:
       # 巡检间隔（秒）。10 分钟：告警有"同日同容器只投一次"的冷却 ⇒ 频率不影响告警量；
       # 而 drive-loop 一轮是分钟级 ⇒ 10 分钟足够覆盖「停了没人管」这个窗口。
       - WATCH_INTERVAL=600
-      - WATCH_COMPOSE_DIR=/volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+      - WATCH_COMPOSE_DIR=/volume2/docker_ssd/reseed
       # ★★ 2026-10-04：通知模块已整体剥离（见 `重构方案.md` §11）。`NOTIFY=0` ⇒
       #   巡检**照样拉起容器**，但**不往 spool 投告警**。默认 `1`（保留投递能力）。
       #   ★ 等项目 B（邮件通知告警）接管告警编排后，把这里改成 `NOTIFY=0`；
@@ -510,15 +534,17 @@ services:
       # ② 宿主机的 docker + compose 插件（真身；见上面★★★ ②）
       - /var/packages/ContainerManager/target/usr/bin/docker:/usr/local/bin/docker:ro
       - /var/packages/ContainerManager/target/usr/bin/docker-compose:/usr/local/lib/docker/cli-plugins/docker-compose:ro
-      # ③ compose 目录，**同路径**（读 compose.yaml + 写 notify/spool）（见上面★★★ ③）
-      - /volume2/docker_ssd/prowlarr_cross-seed_autohardlink:/volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+      # ③ compose 根，**同路径**（读 compose.yaml）（见上面★★★ ③）
+      #    ★ 2026-10-05（B2）：改名后新根 = /volume2/docker_ssd/reseed。
+      - /volume2/docker_ssd/reseed:/volume2/docker_ssd/reseed
       # ④ ★★ 2026-10-01：项目 B 的 compose 目录，**同路径**挂载（同 ③ 的规则）。
       #   不挂它 ⇒ 脚本第 431 行的 `COMPOSE_FILE_QB` 探测恒失败 ⇒ 每趟报"找不到 compose 文件"，
       #   而 qb 真停了时**拉不起来**。这是"看着绿其实没能力"的典型（A.11 / B.10 第 14 条）。
       - /volume2/docker_ssd/qbittorrent-reseed:/volume2/docker_ssd/qbittorrent-reseed
-    working_dir: /volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+    working_dir: /volume2/docker_ssd/reseed
     # ★ 入口是那个循环；`sh` 显式写出（镜像的 entrypoint 不保证有 sh 之外的假设）。
-    command: ["sh", "scripts/diag/watch-containers-loop.sh"]
+    #    ★ 2026-10-05（B2）：脚本收进 `data/scripts/diag/` ⇒ `working_dir` 下的相对路径随之加 `data/`。
+    command: ["sh", "data/scripts/diag/watch-containers-loop.sh"]
     networks: [reseed-net]
     logging: *logging-limits
 

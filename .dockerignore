@@ -1,16 +1,31 @@
-# 编排器镜像构建上下文 = 本目录；下列内容与构建无关或含密钥，排除掉。
+# 镜像构建上下文 = **仓库根**（`docker build -f data/orchestrator/Dockerfile .`）；
+# 下列内容与构建无关或含密钥，排除掉。
 # ★ `.env` 必须写成 `.env*`：`.env` 是**精确匹配**，拦不住 `.env.bak.20260911-204109`
 #   这类完整副本（同样含 NAS IP / apikey / PT passkey）。
 #   实测仓库根目录**确实躺着**这样一份备份 —— 只写 `.env` 的话，
 #   `docker build` 会把它原样打进镜像层，而镜像层**删不掉**（删了也还在历史层里）。
 #   .gitignore 里 `.env` 与 `.env.bak.*` 是分开两条，这里一条通配更省事。
 .env*
-prowlarr/
-cross-seed/
-hlink/
-data/
+# ★★ 2026-10-05（B2）：**不能整目录排除 `data/`** —— 构建要 `COPY data/orchestrator/` 与
+#   `COPY data/drive-loop/…`。改为**逐个排除** data/ 下的运行时/配置目录（含 cookie/db/密钥）：
+data/cross-seed/
+data/hlink/
+data/prowlarr/
+# ★ 运行态目录（state.db / .state / 日志 —— 全是运行时产物，绝不进镜像）
+data/drive-loop/state/
+# ★ 本机专属（不上 NAS、不入镜像）
+tests/
+tools/
+summary/
+scripts/
 patches/
 README.md
+CLAUDE.md
+ENVIRONMENT.md
+SUMMARY.md
+重构方案.md
+docs/
+deploy.sh
 **/__pycache__/
 **/*.pyc
 .git/

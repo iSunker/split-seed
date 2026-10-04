@@ -132,22 +132,38 @@ qB recheck **不通过时不报错**，而是**就地重下**那几个 piece。�
 ## 目录结构
 
 ```
-prowlarr_cross-seed_autohardlink/   # NAS 部署目录（compose 就放这里，./ 即指它）
-├─ docker-compose.yml     # prowlarr + (flaresolverr可选) + cross-seed + reseed-orchestrator
+reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-seed_autohardlink 改名）
+├─ compose.yaml           # ★唯一的 compose（prowlarr + flaresolverr + cross-seed + reseed-orchestrator
+│                         #   + drive-loop + autoheal + watcher）；容器相关目录都收进 data/
 ├─ .env                   # 由 .env.example 复制而来；IP/密钥/路径/开关（单点维护）
 ├─ .env.example
-├─ cross-seed/
-│  └─ config.js           # cross-seed 配置（从 .env 取值；含版本免责说明）→ 挂进 /config
-├─ prowlarr/              # Prowlarr 配置目录（首次启动自动写入）→ 挂进 /config
-├─ hlink/
-│  ├─ config.yml          # ★大包任务 + 全局设置（你主要编辑这个）→ 挂进 /config
-│  └─ state.db            # ★状态机运行时库（自动生成，勿提交）
-├─ orchestrator/          # 编排器(Python, 仅依赖 PyYAML) 源码 + Dockerfile：预检/驱动/汇报
-│  └─ state.py            # ★单片状态机（sidecar 库，只读 cross-seed/qB，见「扩展」）
+├─ deploy.sh              # 本地→NAS 的**配置同步**（只搬 compose + 配置；**代码走镜像**）
+├─ data/                  # ★容器相关的**全部**内容（2026-10-05 收拢）
+│  ├─ cross-seed/
+│  │  ├─ config.js        # cross-seed 配置（从 .env 取值；含版本免责说明）→ 挂进 /config
+│  │  └─ wait-for-qb.sh   # 启动闸门：先等 qB 就绪**且能登录**，再 exec daemon → /config
+│  ├─ prowlarr/           # Prowlarr 配置目录（首次启动自动写入）→ 挂进 /config
+│  ├─ hlink/
+│  │  └─ config.yml       # ★大包任务 + 全局设置（你主要编辑这个）→ 挂进 /config
+│  ├─ orchestrator/       # 编排器(Python, 仅依赖 PyYAML) 源码 + Dockerfile：预检/驱动/汇报
+│  │  └─ state.py         # ★单片状态机（sidecar 库，只读 cross-seed/qB，见「扩展」）
+│  ├─ drive-loop/         # drive-loop 容器（代码**全在镜像里**，见 docker build 一节）
+│  │  ├─ Dockerfile       # 镜像定义（构建上下文 = 仓库根）
+│  │  ├─ run.sh           # 宿主 `--once` 入口（DSM 任务计划调，手工放 NAS）
+│  │  ├─ run-resident.sh  # 容器内常驻入口（build 进镜像 = /app/run-resident.sh）
+│  │  ├─ scripts/         # drive-loop.py / reseed-state.py / build-farm.sh（build 进镜像）
+│  │  └─ state/           # ★运行态挂载卷：6 个 .state + attempts.log + drive-loop.log
+│  │                      #   + hlink/state.db（容器内 = /state）—— 不进 git、不进镜像
+│  └─ scripts/diag/       # watch-containers*.sh（watcher 容器读）
 ├─ patches/reseed-qbit.conf.md   # Phase 0：:3060 需改的配置项（参考文档）
 ├─ ENVIRONMENT.md         # ★环境前提与坑手册（检索层：A 部分前提 + B 部分 `ERR-*` 条目）
 └─ README.md
 ```
+
+> ★ 2026-10-05 结构变更（`重构方案.md` §8）：容器相关文件全部收进 `data/`，`data/` 平级
+>   只留**一个** `compose.yaml`；**代码只进镜像**（本机 build + push，NAS pull），
+>   `deploy.sh` 只搬 compose 与配置。规则见 `.claude/rules`。
+
 
 > 开发仓库里另有 `scripts/`（`run-batch.sh` 抽样脚本、`reseed-state.py` 状态机 CLI、
 > `drive-loop.py` 自动续跑、`add-indexers.py` 加站、`gen-datadirs.py` 生成嵌套包的 `DATA_DIRS` 片段、
@@ -290,7 +306,7 @@ MSYS_NO_PATHCONV=1 python scripts/diag/check-datadirs-names.py
 
 ## 部署步骤（分阶段，每步可独立验证）
 
-> 前置：把本目录内容整个放到 NAS 部署目录 `/volume2/docker_ssd/prowlarr_cross-seed_autohardlink`，`cd` 进去执行下述命令。
+> 前置：把本目录内容整个放到 NAS 部署目录 `/volume2/docker_ssd/reseed`，`cd` 进去执行下述命令。
 > `cp .env.example .env`，然后编辑 `.env`：至少填 `NAS_IP`、`CROSSSEED_API_KEY`、确认 `DATA_DIRS`/`LINK_DIR` 路径。
 > 确保 `LINK_DIR` 与 `DATA_DIRS` **在同一物理卷**（都在 `/volume1/video` 下即可）。
 
@@ -348,7 +364,7 @@ docker compose run --rm reseed-orchestrator status                          # �
    ★ 这条**必须是可执行命令**，不许写成「看一眼日报」：后一种写法**没有判据形态**，
    而它正是 Part B 挂在「未验收」状态过了九次收口的原因。
    ```bash
-   grep -c packpct "//YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink/notify/log/$(date +%F).tsv"
+   grep -c packpct "//YOUR-NAS/docker_ssd/reseed/notify/log/$(date +%F).tsv"
    ```
    * `>0` ⇒ **生效**：日报正文里该出现 `（95%，74/78）` 这样的「百分比 + 未约简分数」，
      分母为 0 的包写 **`（n/a）`**（**不是** `0%`），末尾还有一行 `总计：…  ← 各包之和，非平均值`。
@@ -369,7 +385,7 @@ docker compose run --rm reseed-orchestrator status                          # �
 5. **「装不出来的单种」那一段有没有真进日报**（`SUMMARY §27`）——
    ★ 同样是**可执行命令**，不是「看一眼」。
    ```bash
-   tsv="//YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink/notify/log/$(date +%F).tsv"
+   tsv="//YOUR-NAS/docker_ssd/reseed/notify/log/$(date +%F).tsv"
    grep -c 未完成且停滞 "$tsv"     # 应 > 0
    grep -o 'fz_total=[0-9]*' "$tsv" # 应出现，且 == 当时的 :3060 总数
    ```

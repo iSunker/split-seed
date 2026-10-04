@@ -36,6 +36,9 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 
 from orchestrator.state import (            # noqa: E402
     ALL_STAGES, CENSUS_DENOM_STAGES, STAGE_SEARCHED, STAGE_UNMATCHED,
@@ -216,7 +219,7 @@ with StateStore(empty, create=True) as st:
 print()
 print("== ③ 计数只有一份（#97）==")
 
-_STATE_SRC = (REPO / "orchestrator" / "state.py").read_text(encoding="utf-8")
+_STATE_SRC = (REPO / "data" / "orchestrator" / "state.py").read_text(encoding="utf-8")
 ck_true("★ sync_pack 不再自己写计数（改调共用函数）",
         "rep.seeding, _ = pack_seeding_total(store, pack_name)" in _STATE_SRC,
         "没找到那一行 —— 计数可能又被复制成两份了")
@@ -347,17 +350,22 @@ ck_true("★ 阴性对照：除零给 0 与真值 \"n/a\" **不同** ⇒ ④c �
 
 # ---- ④e metrics 键：#95 合规 + 绝不拼出 `pack=` ----
 # 走**真** notify.py 的渲染（与 ① 段同一套切法），验证端到端而不是猜键名。
-_wm = {"packpct:my pack": 64, "packnum:my pack": 72, "packden:my pack": 115,
-       "seeding:my pack": 74, "total:my pack": 115, "ok": 50}
-_line = _metrics_line(_wm)
-_keys = _keys_of(_line)
-ck("★ 新键里的空格被规范化（写入端一处负责）", "packpct:my_pack=64" in _line, True)
-ck_true("★★ **不许**出现键恰好等于 `pack` 的碎片（否则该行被误计为一批）",
-        "pack" not in _keys, f"切出的键={_keys!r}")
-ck("★ 被消费的另三个键也不在（ok 在，另两个不在）",
-   [k for k in _keys if k in ("ok", "newly_seeding", "backoff_hits")], ["ok"])
-ck_true("★ `packnum:`/`packden:` **字面含 `pack` 子串**，靠整键比较才安全",
-        any("pack" in k for k in _keys) and "pack" not in _keys, f"切出的键={_keys!r}")
+# ★★ 2026-10-05：整段**依赖 notify.py**（`_metrics_line`/`_keys_of` 都在上面
+#   `if _HAVE_NOTIFY:` 里定义）。通知模块剥离后 notify.py 不在仓库里 ⇒ 这俩名字
+#   未定义；若不守卫，本文件会在**真跑**时 NameError 崩溃（而不是"跳过"）。
+#   ⇒ 与 ① 段同一道 `_HAVE_NOTIFY` 闸。
+if _HAVE_NOTIFY:
+    _wm = {"packpct:my pack": 64, "packnum:my pack": 72, "packden:my pack": 115,
+           "seeding:my pack": 74, "total:my pack": 115, "ok": 50}
+    _line = _metrics_line(_wm)
+    _keys = _keys_of(_line)
+    ck("★ 新键里的空格被规范化（写入端一处负责）", "packpct:my_pack=64" in _line, True)
+    ck_true("★★ **不许**出现键恰好等于 `pack` 的碎片（否则该行被误计为一批）",
+            "pack" not in _keys, f"切出的键={_keys!r}")
+    ck("★ 被消费的另三个键也不在（ok 在，另两个不在）",
+       [k for k in _keys if k in ("ok", "newly_seeding", "backoff_hits")], ["ok"])
+    ck_true("★ `packnum:`/`packden:` **字面含 `pack` 子串**，靠整键比较才安全",
+            any("pack" in k for k in _keys) and "pack" not in _keys, f"切出的键={_keys!r}")
 
 # ---- ④f 渲染层：② 口径那份正文 + 总计行 ----
 print()
@@ -366,7 +374,7 @@ print("== ④f 渲染（pack_progress_watch）==")
 # ★★ 接法：**不动真 `S.pack_progress`**，只在渲染前把它换成喂数据的桩。
 #   （第一版我伪造了一个 `StateStore`，而渲染层会一路走到 `store.movies()` ⇒
 #    `AttributeError` —— 桩要打在**渲染层唯一那个入口**上，不是它下面。）
-DL = _load(REPO / "scripts" / "drive-loop.py", "drive_loop_pack_progress")
+DL = _load(REPO / "data" / "drive-loop" / "scripts" / "drive-loop.py", "drive_loop_pack_progress")
 _REAL_PP = DL.S.pack_progress
 
 # 两个包、分母**不等** ⇒ 「总计取和」与「总计取平均」给出**不同**的数：
@@ -453,7 +461,7 @@ DL.S.pack_progress = _REAL_PP          # ★ 还原，别让桩漏到后面的�
 # ---- ④g #96 回归：渲染层炸了不许带走整份日报 ----
 print()
 print("== ④g #96 回归：新节失败的口径 ==")
-_src = (REPO / "scripts" / "drive-loop.py").read_text(encoding="utf-8")
+_src = (REPO / "data" / "drive-loop" / "scripts" / "drive-loop.py").read_text(encoding="utf-8")
 _rd = _src[_src.find("def report_daily"):]
 _rd = _rd[:_rd.find(chr(10) + "def ")]
 ck_true("★ `pack_progress_watch(st)` 在 report_daily 的 try 里被调用",

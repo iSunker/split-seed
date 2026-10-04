@@ -14,6 +14,9 @@ from pathlib import Path
 
 REPO = str(Path(__file__).resolve().parent.parent)  # 仓库根
 sys.path.insert(0, REPO)
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
 
 from orchestrator import state as S   # noqa: E402
 from orchestrator import main as M    # noqa: E402
@@ -123,7 +126,7 @@ ck("  退出码 2", rc, 2)
 ck("  明说不会替你建库", "不会替你建一个空库" in out, True)
 ck("  ★★ 文件**没有**被建出来", missing.exists(), False)
 ck("  ★ 连父目录也没被建出来", missing.parent.exists(), False)
-ck("  给了真实位置（drive-loop/hlink）", "drive-loop/hlink/state.db" in out, True)
+ck("  给了真实位置（drive-loop/hlink）", "hlink/state.db" in out, True)
 
 print("\n== ④b ★★ 根因闸：StateStore **自己**不建库（不只是 cmd_state 那一层）==")
 # ★ 为什么单钉这一格：上面 ④ 证的是 `cmd_state` **这个调用点**上有一道闸。
@@ -139,7 +142,7 @@ try:
 except FileNotFoundError as e:
     raised = e
 ck("  抛 FileNotFoundError", isinstance(raised, FileNotFoundError), True)
-ck("  提示里点名真实位置", "drive-loop/hlink/state.db" in str(raised), True)
+ck("  提示里点名真实位置", "hlink/state.db" in str(raised), True)
 ck("  ★★ 文件**没有**被建出来", gate.exists(), False)
 ck("  ★ 连父目录也没被建出来", gate.parent.exists(), False)
 # ★ 反向控制：不验这一条的话，一道"永远抛"的闸也能让上面四格全绿 ——
@@ -196,7 +199,7 @@ print("\n== ⑨ ★★ `--qbit-url` 指向 cross-seed（:2468）必须出声（#
 import importlib.util as _ilu
 import argparse as _ap
 _rs_spec = _ilu.spec_from_file_location(
-    "reseed_state", os.path.join(REPO, "scripts", "reseed-state.py"))
+    "reseed_state", os.path.join(REPO, "data", "drive-loop", "scripts", "reseed-state.py"))
 _rs = _ilu.module_from_spec(_rs_spec)
 sys.modules["reseed_state"] = _rs
 _rs_spec.loader.exec_module(_rs)

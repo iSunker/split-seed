@@ -81,7 +81,19 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
+# ★★ 2026-10-05（B2，data/ 收拢）：`ROOT` 不再简单等于 `HERE.parent`。
+#   背景：`orchestrator` 包在**本机仓库**里是 `data/orchestrator/`，而本文件在
+#   `data/drive-loop/scripts/` ⇒ 二者**不再是兄弟**（`HERE.parent` 会指到
+#   `data/drive-loop/`，那里没有 orchestrator）。而在**镜像**里两者是 `/app/orchestrator/`
+#   与 `/app/scripts/` —— 又是兄弟。
+#   ⇒ 判据改成「**向上找到含 `orchestrator/` 的那一层**」：本机与镜像都对，
+#     且以后无论把代码放多深都不必再改这一行。
+def _find_root() -> Path:
+    for cand in (HERE.parent, HERE.parent.parent, HERE.parent.parent.parent):
+        if (cand / "orchestrator" / "__init__.py").is_file():
+            return cand
+    return HERE.parent          # 兜底：找不到就退回原行为（导入会自己报错）
+ROOT = _find_root()
 sys.path.insert(0, str(ROOT))
 
 # --------------------------------------------------------------------------- #
@@ -117,8 +129,14 @@ except Exception:  # noqa: BLE001
 
 LOG = logging.getLogger("drive-loop")
 
-# sidecar 状态库默认位置（与 reseed-state.py 的 DEFAULT_DB 保持一致）
-DEFAULT_DB = os.environ.get("RESEED_STATE_DB", str(ROOT / "hlink" / "state.db"))
+# sidecar 状态库默认位置（与 reseed-state.py 的 DEFAULT_DB 保持一致）。
+# ★★ 2026-10-05（B2，代码入镜像）：与 `STATE_DIR` 同一套约定 ——
+#   ① RESEED_STATE_DB（显式全路径）最优先；② 否则 DRIVE_STATE_DIR/hlink/state.db；
+#   ③ 都没有才回退 ROOT/hlink/（本机开发/旧行为）。ROOT 在镜像里是 /app ⇒ 反推必错。
+DEFAULT_DB = os.environ.get("RESEED_STATE_DB") or (
+    str(STATE_DIR / "hlink" / "state.db") if os.environ.get("DRIVE_STATE_DIR")
+    else str(ROOT / "hlink" / "state.db")
+)
 
 #: `--packs` 的默认名单 —— 本仓库里**唯一**一处「哪个包会被驱动」的声明。
 #: ★ 之所以提成模块常量、而不是留在 argparse 那一行里：这个值同时被**两处**引用

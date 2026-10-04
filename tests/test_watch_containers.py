@@ -82,7 +82,7 @@ import sys
 import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-SRC = REPO / "scripts" / "diag" / "watch-containers.sh"
+SRC = REPO / "data" / "scripts" / "diag" / "watch-containers.sh"
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -317,7 +317,7 @@ try:
     # ★ 这里必须带上 **NAS 的 daemon 身份**：否则在开发机上跑自测会被
     #   daemon 身份那关拦掉（这正是它该做的），而那不是守卫"误拦"。
     lab.daemon = NAS_DAEMON
-    r = selftest_run_path(lab, "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink")
+    r = selftest_run_path(lab, "/volume2/docker_ssd/reseed")
     check("★★ 对照：真 NAS 路径（/volume2/...）+ NAS 身份 **被放行**（不当成开发机拦掉）",
           r.returncode == 0 and "未验" not in r.stdout,
           "rc=%s（若这里红了看是不是守卫误拦）" % r.returncode)
@@ -326,7 +326,7 @@ try:
     #   "长得像 NAS 的绝对路径" + 开发机的 daemon ⇒ 必须 rc=2。
     #   ★ 这是路径守卫**永远**拦不住的那个形状（路径就是生产路径）。
     lab.daemon = DEV_DAEMON
-    r = selftest_run_path(lab, "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink")
+    r = selftest_run_path(lab, "/volume2/docker_ssd/reseed")
     check("★★★ §32.8：生产路径 + **开发机 daemon** ⇒ rc=2（路径守卫拦不住的那一维）",
           r.returncode == 2, "rc=%s out=%s" % (r.returncode, (r.stdout + r.stderr)[:200]))
     check("  ↳ 且**没有**执行任何 up -d（绝不许打到本机 daemon）",
@@ -343,7 +343,7 @@ try:
     #   ⇒ 新判据：读不出 ⇒ **未验（rc=2）**，且**只投一条 daemon 级告警**，
     #     **不投**任何逐容器「拉不起来」告警、**不执行** up -d。
     lab.daemon = ""
-    r = selftest_run_path(lab, "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink")
+    r = selftest_run_path(lab, "/volume2/docker_ssd/reseed")
     check("★★ 读不出 daemon 身份 ⇒ **未验 rc=2**（测到/没测到必须分得开）",
           r.returncode == 2, "rc=%s（读不出 = 未验，不是放行）" % r.returncode)
     check("★★ 且**没有**任何 up -d（daemon 不在时不空跑 compose）",
@@ -628,7 +628,7 @@ print("\n── ⑨ ★★ 静态：orchestrator 不属于看护名单 + cross-s
 #      容器里没有那个文件 ⇒ 起不来）。判据**成对**：正的要有、反的（`command: daemon`）要判红。
 try:
     import yaml  # noqa: PLC0415  —— 本仓必有（drive-loop 等测试都 import 它）
-    _compose = yaml.safe_load((REPO / "docker-compose.yml").read_text(encoding="utf-8"))
+    _compose = yaml.safe_load((REPO / "compose.yaml").read_text(encoding="utf-8"))
     _svcs = _compose.get("services") or {}
 
     # (1) orchestrator：restart: no（或 "no"）且无 command
@@ -667,7 +667,7 @@ try:
           "wait-for-qb.sh" not in _probe_ep_s, "判据恒真 ⇒ 它什么也没钉住")
 
     # (3) 闸门脚本本体必须在仓库里（否则 deploy 推不上去 ⇒ 容器里没这个文件）
-    _gate = REPO / "cross-seed" / "wait-for-qb.sh"
+    _gate = REPO / "data" / "cross-seed" / "wait-for-qb.sh"
     check("★★ 静态：闸门脚本 `cross-seed/wait-for-qb.sh` **在仓库里**（否则 deploy 推不上去）",
           _gate.is_file(), "缺 %s" % _gate)
     # (4) 且它**带硬超时**（不许无限挂起 —— 那会变成"卡住的假在跑"，比崩溃循环更难发现）

@@ -15,6 +15,9 @@ from pathlib import Path
 
 REPO = str(Path(__file__).resolve().parent.parent)  # 仓库根
 sys.path.insert(0, REPO)
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
 
 from orchestrator import state as S  # noqa: E402
 
@@ -254,7 +257,7 @@ ck("  只用 matched_indexers，不把占位当站", r4.sites, ["HDFans"])
 # --------------------------------------------------------------------------- #
 print("\n== ⑪ 每日台账：一天只投一次 ==")
 spec = importlib.util.spec_from_file_location(
-    "dl", REPO + "/scripts/drive-loop.py")
+    "dl", REPO + "/data/drive-loop/scripts/drive-loop.py")
 dl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dl)
 dl.DAILY_FILE = TMP / ".daily-report.state"

@@ -62,6 +62,9 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")

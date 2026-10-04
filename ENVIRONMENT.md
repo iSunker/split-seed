@@ -97,7 +97,9 @@ grep -n '弯路 #' ENVIRONMENT.md
 
 - Docker 网络：本栈 `reseed-net`（bridge）+ **external** `qbit-net` = `qbittorrent-reseed_default`。
 - `PUID=1026` / `PGID=100` / `TZ=Asia/Shanghai`。
-- 生产栈目录：`/volume2/docker_ssd/prowlarr_cross-seed_autohardlink`，SMB 视图 `//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink`。
+- 生产栈目录：`/volume2/docker_ssd/reseed`，SMB 视图 `//iSunker-DS423/docker_ssd/reseed`。
+  ★ 2026-10-05：原名 `prowlarr_cross-seed_autohardlink`，已改名 `reseed`；**容器相关目录收进 `data/`**，
+  平级只留一个 `compose.yaml`。代码只进镜像（本机 build+push / NAS pull）。详见 `重构方案.md` §8 与 `.claude/rules`。
 
 ### 版本
 
@@ -270,7 +272,7 @@ NAS 上还跑着**别人的**容器（IYUU Plus、另一套 qB、opencd），它
 | 文件寿命 | 放哪 | 例 |
 |---|---|---|
 | **一次性的**（中转包、验证脚本、导入的 tar） | ★ **专用的临时目录 + 用完立刻删** —— 目录名要**一眼看出是临时的**（如 `<compose>/_tmp-<用途>/`），**不许放共享根**、**不许放 `/volume1`** | `_drive-loop-img.tar.gz`、`_tmp129/` 下的 `_del.sh` |
-| **长期用的**（脚本、配置、日志、状态） | ★ **只在生产地址**：`/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/` 下**它该在的那一层**（见 `deploy.sh` 的 FILES 映射）；★ 或**入库**（在 NAS 上手工跑、只进 `scripts/diag/check-deploy-drift.py` 的 `LOCAL_ONLY`） | `drive-loop/scripts/*`、`notify/*`；`scripts/diag/chk58.sh`、`scripts/diag/chk-volume1-free.sh` |
+| **长期用的**（脚本、配置、日志、状态） | ★ **只在生产地址**：`/volume2/docker_ssd/reseed/` 下**它该在的那一层**（见 `deploy.sh` 的 FILES 映射）；★ 或**入库**（在 NAS 上手工跑、只进 `scripts/diag/check-deploy-drift.py` 的 `LOCAL_ONLY`） | `drive-loop/scripts/*`、`notify/*`；`scripts/diag/chk58.sh`、`scripts/diag/chk-volume1-free.sh` |
 
 > ★★ **一条代价（2026-09-17 实测，它把这条规则的边界划出来了）**：
 > **「用完就删」是对的，但"判据"不能跟着脚本一起删。**
@@ -520,7 +522,7 @@ qB 校验队列单线程。
 > 1. **一次性文件 — 用完立刻删**。不许在别处留下细小文件（临时探针、`cat >` 粘的脚本、
 >    `/tmp` 残留都算）。★ 判据：**做完这一趟，NAS 上没有"多出来的、没人认领的"文件** ——
 >    跑完漂移哨兵 A 方向应仍是 `未知 0`。
-> 2. **长期文件 — 必须放项目目录内**（`/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/`
+> 2. **长期文件 — 必须放项目目录内**（`/volume2/docker_ssd/reseed/`
 >    下），**不许落在项目目录外**（如 `$HOME`、`/tmp`、`/volume1`）。
 >    ★ 放进去的还要**在仓库里登记**（`KNOWN_NAS` / `LOCAL_ONLY`，见漂移哨兵），
 >    否则哨兵会报"未知文件" —— 而**哨兵常红 = 没有哨兵**。
@@ -637,7 +639,7 @@ cross-seed **不会排队、不会重试**：索引器被退避时，待搜索�
 
 ```bash
 PACK=frds-top250-2024
-N=//YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink
+N=//YOUR-NAS/docker_ssd/reseed
 
 # ★推荐：根清单从 .env 派生（首选 FARM_SOURCES；缺席时退回 DATA_DIRS）
 python scripts/reseed-state.py init --pack $PACK --depth 2 \
@@ -1150,7 +1152,7 @@ python scripts/reseed-state.py farm --pack <包名> --root /volume1/video/downlo
 1. ★★ **先读一次现状**（**一条命令，只读，不改任何东西**）：
    ```bash
    # 在仓库根跑；走 UNC 只读。★ 路径是你这台机器的真值
-   python -c "import json,pathlib;d=json.loads(pathlib.Path('//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/scripts/.drive-loop.state').read_text(encoding='utf-8'));print('last_pack_idx =',d.get('last_pack_idx'),'| mode =',d.get('mode'),'| phase =',d.get('phase'))"
+   python -c "import json,pathlib;d=json.loads(pathlib.Path('//iSunker-DS423/docker_ssd/reseed/data/drive-loop/state/.drive-loop.state').read_text(encoding='utf-8'));print('last_pack_idx =',d.get('last_pack_idx'),'| mode =',d.get('mode'),'| phase =',d.get('phase'))"
    ```
    ★ 为什么先看它：`once_round` 存的是**下标而不是名字** ⇒
    **动 `PACKS_DEFAULT` 的顺序 = 偷偷改"下一批跑谁"**。★ 名单长度一变，
@@ -1178,7 +1180,7 @@ python scripts/reseed-state.py farm --pack <包名> --root /volume1/video/downlo
    python - <<'PY'
    import pathlib
    from collections import defaultdict
-   d = pathlib.Path("//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/notify/log")
+   d = pathlib.Path("//iSunker-DS423/docker_ssd/reseed/notify/log")
    agg = defaultdict(lambda: [0, 0, 0])
    for f in sorted(d.glob("*.tsv"))[-2:]:
        for ln in f.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -1284,14 +1286,15 @@ FRDS/MBF 行为完全不变）。
 compose 目录（纯 LF，`sh` 可直接跑）：
 
 ```bash
-# 本地：拷到 NAS 的 compose 目录
-cp scripts/build-farm.sh "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/"
+# 本地：拷到 NAS 的 compose 目录（★ 2026-10-05：源路径随 data/ 收拢改成 data/drive-loop/scripts/；
+#   生产目的地仍是 compose 根 —— drive-loop.py 的 _run_verify 在 compose 根找它）
+cp data/drive-loop/scripts/build-farm.sh "//iSunker-DS423/docker_ssd/reseed/"
 ```
 
 然后**在 NAS 上跑**（最省事）：
 
 ```bash
-cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+cd /volume2/docker_ssd/reseed
 sh build-farm.sh                    # 默认 dry-run：只统计预演，一个文件都不建
 sh build-farm.sh --apply            # 真建（增量：已存在的跳过）
 sh build-farm.sh --apply --prune    # 顺带删掉"源已经没了"的条目
@@ -1312,7 +1315,7 @@ sh build-farm.sh --verify           # 只校验农场 vs 源
 > 此时 `.env` 里的 `/volume1/...` 在本机不存在，用 `--map` 做前缀翻译即可：
 >
 > ```bash
-> COMPOSE_DIR="//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink" \
+> COMPOSE_DIR="//iSunker-DS423/docker_ssd/reseed" \
 > FARM="//iSunker-DS423/video/download/reseed/reseed_farm" \
 > sh scripts/build-farm.sh --map "/volume1=//iSunker-DS423"          # 先 dry-run
 > # 确认 → 同一行末尾加 --apply
@@ -1977,8 +1980,8 @@ spool 积压: 0 条告警
    （`eventpasscrypted`），所以「读 DSM 配置、自己发信」这条路也不存在。
 2. 把 NAS 侧脚本同步过去 —— **已在 `deploy.sh` 白名单里**，一条命令：
    ```bash
-   DST=//YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink bash deploy.sh          # 先看 diff
-   DST=//YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink bash deploy.sh --apply   # 写入
+   DST=//YOUR-NAS/docker_ssd/reseed bash deploy.sh          # 先看 diff
+   DST=//YOUR-NAS/docker_ssd/reseed bash deploy.sh --apply   # 写入
    ```
    > ⚠ **别在批次运行中 `--apply`**（2026-09-12 踩过）：`sh` 是**边读边执行**脚本的，
    > 覆盖正在跑的 `run.sh` 会让它执行到错位的代码 —— `deploy.sh` 现在改成**原子替换**
@@ -2001,7 +2004,7 @@ spool 积压: 0 条告警
 
    然后在 NAS 上填配置：
    ```bash
-   cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/notify
+   cd /volume2/docker_ssd/reseed/notify
    cp notify.conf.example notify.conf && vi notify.conf
    #   MAIL_TO   = 你的收件邮箱
    #   MAIL_FROM = ★ 必须与 DSM 里那个**认证账号完全相同**（逐字相同，包括域名）
@@ -2272,7 +2275,7 @@ python scripts/drive-loop.py --once --notify-spool "D:/tmp/x"    # 换个 spool
 #### A.19.1.4 🆕 日常看板（2026-09-12 新增，都在 NAS 上跑）
 
 ```bash
-D="//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+D="//iSunker-DS423/docker_ssd/reseed"
 
 # 新增做种趋势：按 (周, 站) —— 换站决策看这个，别看某个瞬间的快照
 python scripts/reseed-state.py --db "$D/drive-loop/hlink/state.db" trend --weeks 8 -v
@@ -2385,7 +2388,7 @@ python scripts/diag/scan-secrets.py            # 0 可以推 / 1 有新引入的
 | `mbf` | 4 | ⚠ HDFans 上 **0 匹配**（4 个季包全 `Found 0 torrents`）；**2026-09-13 起已排进 `--packs` 被驱动**（#40）—— 若 HDtime 上也 0 匹配就移出名单 |
 
 ```bash
-DB="//YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/hlink/state.db"
+DB="//YOUR-NAS/docker_ssd/reseed/data/drive-loop/state/hlink/state.db"
 python -c "
 import sqlite3; c=sqlite3.connect(r'$DB')
 for r in c.execute('SELECT pack,stage,COUNT(*) FROM movie GROUP BY pack,stage ORDER BY pack,stage'): print(r)"
@@ -2412,7 +2415,7 @@ python scripts/drive-loop.py --indexers HDFans,NanyangPT
 > 原来还有一条 UNC 兜底（Windows 经 SMB 跑时用），现已注释。
 >
 > **★ 2026-09-11 起，调度跑在 NAS 上**：DSM 任务计划每 15 分钟执行
-> `sh /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/run.sh`。
+> `sh /volume2/docker_ssd/reseed/data/drive-loop/run.sh`。
 > ★ **2026-09-12 电脑端彻底退役**（包装器与 PC 侧状态已删，见「⛔ 电脑端已不参与」）。
 > 当初搬走的原因不是性能，是 Windows 侧**批次会静默消失**，
 > 查下去是**两个独立的坑**（完整证据与复现见 SUMMARY §14）：
@@ -2493,7 +2496,7 @@ sudo /usr/syno/bin/synoschedtask --get | grep -A 12 'reseed-drive-loop'
 ```bash
 URL=http://192.168.0.7:2468
 KEY=<CROSSSEED_API_KEY>
-DB="//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/cross-seed/cross-seed.db"
+DB="//iSunker-DS423/docker_ssd/reseed/data/cross-seed/cross-seed.db"
 Q="http://192.168.0.7:3060"          # ★必须带 --qbit-url，否则 SEEDING 被误降级！
 
 python scripts/reseed-state.py drive --pack dc-collection --indexers HDFans,NanyangPT --limit 50 \
@@ -2599,7 +2602,7 @@ schtasks /Delete /TN "reseed-drive-loop" /F
 **在 NAS 上**（SSH 或 Container Manager「终端」）：
 
 ```bash
-cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+cd /volume2/docker_ssd/reseed
 sh nas-update-env.sh --dry-run     # 先看会改什么：DATA_DIRS 49 条 → 1 条
 sh nas-update-env.sh               # 改 + --force-recreate + 闭环回读校验
 ```
@@ -3323,7 +3326,7 @@ searchee 数与切换前**一致（1888）**。
 - **触发条件**：把宿主上"相对某个目录"的路径写法直接搬进 `docker exec`。
 - **规避做法**：**一律用绝对路径**（挂载是 1:1，所以宿主路径 == 容器路径）：
   ```bash
-  sudo docker exec reseed-drive-loop sh /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/notify/notify-spool.sh --test-mail
+  sudo docker exec reseed-drive-loop sh /volume2/docker_ssd/reseed/notify/notify-spool.sh --test-mail
   ```
   ★ 自证这条假设的一行（`#58` 实测）：`pwd` 打 `/app`、`ls -d /volume2/…/<compose>` 打得出来
   ⇒ **相对不成立、绝对成立**，一次说清。
@@ -4836,7 +4839,7 @@ searchee 数与切换前**一致（1888）**。
   **没有独立节律**，它继承调用者的节律）。★ 然后**用产出物的 mtime 分布复核**
   （`ls -l --time-style=long-iso` 看一批，**不要看一份**）：
   ```bash
-  ls -l --time-style=long-iso /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/notify/log | tail -8
+  ls -l --time-style=long-iso /volume2/docker_ssd/reseed/notify/log | tail -8
   ```
 - **边界**：★ 这条**不改变**判据的内容（"日报里该出现那段、metrics 该有那组键"），
   只改变**何时去看**。★★ 而且它会把判据**变松** —— 从"等一个时刻"变成
@@ -4892,7 +4895,7 @@ searchee 数与切换前**一致（1888）**。
   # ① 出口还在不在（最关键）——任务清单里有没有那个"发摘要"的任务
   sudo /usr/syno/bin/synoschedtask --get | grep 'Name:'
   # ② 生产端是否照常（★ 证明"生成"没坏，但**不能**证明"发得出去"）
-  tail -3 /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/notify/log/2026-09-19.tsv
+  tail -3 /volume2/docker_ssd/reseed/notify/log/2026-09-19.tsv
   # ③ 唯一能证明通路的：真发一封（--selftest **不判断**邮件配置对不对）
   sh …/notify/notify-spool.sh --digest
   ```

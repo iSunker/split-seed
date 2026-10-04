@@ -12,8 +12,11 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent  # 仓库根
-SRC = str(REPO / "scripts" / "drive-loop.py")
+SRC = str(REPO / "data" / "drive-loop" / "scripts" / "drive-loop.py")
 sys.path.insert(0, str(REPO))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
 
 spec = importlib.util.spec_from_file_location("drive_loop", SRC)
 dl = importlib.util.module_from_spec(spec)

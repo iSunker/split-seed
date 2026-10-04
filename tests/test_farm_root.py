@@ -2,6 +2,9 @@
 """v3 农场路径归包的离线自测（纯合成数据，不碰真库）。"""
 import pathlib, sys, tempfile, os
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 
 from orchestrator import state as S
 from orchestrator.state import StateStore, CrossSeedSnapshot, _resolve_searchee_to_pack, _farm_mirror

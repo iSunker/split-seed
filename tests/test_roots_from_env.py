@@ -36,6 +36,9 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 
 # ★ 输出强制 UTF-8：GBK 控制台下会在中途炸掉，而**已经过的断点看着全是 ok**。
 try:
@@ -62,7 +65,7 @@ def _load(path, name):
     return mod
 
 
-RS = _load(REPO / "scripts" / "reseed-state.py", "reseed_state_roots")
+RS = _load(REPO / "data" / "drive-loop" / "scripts" / "reseed-state.py", "reseed_state_roots")
 
 
 def _envfile(farm_sources=None, data_dirs=None):

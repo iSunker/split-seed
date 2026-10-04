@@ -56,18 +56,25 @@ WORKDIR /app
 #        ★ `run-resident.sh` 已加启动自检：读到不含 `PHASE_IDLE` 的旧代码会
 #          **退非零并在 attempts.log 留一行** —— 别让"跑了旧代码"再变成静默。
 #
-#   本仓的形状：`scripts/` 与 `orchestrator/` 同级，
-#   而 `drive-loop.py` 靠 `sys.path.insert(ROOT)`（ROOT = scripts/ 的上级）找 `orchestrator`。
-#   ⇒ 镜像里必须**保持这个相对形状**：/app/scripts/ + /app/orchestrator/
-#   ★ 构建上下文是**仓库根**（`docker build -f scripts/drive-loop.Dockerfile .`）；
-#     NAS 上**不许** build（那边上下文是 compose 目录，相对路径必失败）—— 只 load。
-COPY orchestrator/ /app/orchestrator/
-COPY scripts/drive-loop.py   /app/scripts/drive-loop.py
+#   本仓的形状（2026-10-05 收进 data/ 后）：`data/drive-loop/scripts/` 与
+#   `data/orchestrator/` 是**兄弟**关系 —— 镜像里要复刻这个形状，
+#   因为 `drive-loop.py` 靠 `sys.path.insert(ROOT)`（ROOT = 自己所在目录的**上级**）
+#   找 `orchestrator`。
+#   ⇒ 镜像里必须**保持同一相对形状**：/app/scripts/ + /app/orchestrator/
+#     （★ 源路径随 data/ 收拢而变，**镜像内目标路径不变** —— 上面两条依赖它）。
+#   ★ 构建上下文是**仓库根**（`docker build -f data/drive-loop/Dockerfile .`）；
+#     NAS 上**不许** build（那边没有源码树）—— 只 pull。
+COPY data/orchestrator/ /app/orchestrator/
+COPY data/drive-loop/scripts/drive-loop.py   /app/scripts/drive-loop.py
 # ★ 2026-10-04：`notify.py` **不再 COPY** —— 通知模块已整体剥离（见文件头与本仓
 #   `重构方案.md` §11）。drive-loop.py 的 `import notify` 用 try 兜住 ⇒ 缺它不报错。
-COPY scripts/reseed-state.py /app/scripts/reseed-state.py
+COPY data/drive-loop/scripts/reseed-state.py /app/scripts/reseed-state.py
 # ★ `_run_verify()` 会起子进程跑它 ⇒ **必须在镜像里**（2026-09-17 读代码发现，`#58` 记过）
-COPY scripts/build-farm.sh   /app/scripts/build-farm.sh
+COPY data/drive-loop/scripts/build-farm.sh   /app/scripts/build-farm.sh
+# ★★ 2026-10-05（§8.3，代码入镜像）：**常驻入口 `run-resident.sh` 也进镜像** ——
+#   compose 的 `entrypoint` 从 `<挂载区>/drive-loop/run-resident.sh` 改为 `/app/run-resident.sh`。
+#   ⇒ "挂载那份盖住镜像"这条病根（§26.15 packpct=0）从结构上消失。
+COPY data/drive-loop/run-resident.sh /app/run-resident.sh
 
 # 默认只打印用法，不真跑（真跑用 `docker compose run --rm drive-loop …`）
 ENTRYPOINT ["python", "/app/scripts/drive-loop.py"]

@@ -30,6 +30,9 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -79,7 +82,7 @@ print("=== ② ★★ 反向：`crossseed_client` 必须**显式** import 它用
 #   ★ 为什么用 AST 而不是"看文件里有没有那串字符"：
 #     本改动的**本体**就是一行 import，而文件头注释里也写着 `HttpClient` 吗？——不写。
 #     但 `qbit_client.py` 里的**同名字符串**会让 grep 式判据恒真 ⇒ 必须限定在**本文件**。
-_src = (REPO / "orchestrator" / "crossseed_client.py").read_text(encoding="utf-8")
+_src = (REPO / "data" / "orchestrator" / "crossseed_client.py").read_text(encoding="utf-8")
 _tree = ast.parse(_src)
 
 _imported: set = set()
@@ -223,7 +226,7 @@ ck("★ `strict=True` 在 404 上判 False（旧语义仍可达，便于对照�
    _ping_strict(404) is False)
 
 # ---- ③g ★ 反向：`preflight` 必须**不带** strict（否则修复被绕过）----
-_main = (REPO / "orchestrator" / "main.py").read_text(encoding="utf-8")
+_main = (REPO / "data" / "orchestrator" / "main.py").read_text(encoding="utf-8")
 _tree2 = ast.parse(_main)
 _ping_calls = [n for n in ast.walk(_tree2)
                if isinstance(n, ast.Call)

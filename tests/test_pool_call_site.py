@@ -60,7 +60,7 @@ except Exception:  # noqa: BLE001
     pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC_PATH = os.path.join(HERE, os.pardir, "scripts", "drive-loop.py")
+SRC_PATH = os.path.join(HERE, os.pardir, "data", "drive-loop", "scripts", "drive-loop.py")
 
 fails = []
 

@@ -30,7 +30,7 @@ sys.stdout.reconfigure(encoding="utf-8")        # 见 tests/README.md：GBK 控�
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
-DRIVE_LOOP = ROOT / "scripts" / "drive-loop.py"
+DRIVE_LOOP = ROOT / "data" / "drive-loop" / "scripts" / "drive-loop.py"
 
 _ok = 0
 _bad = 0
@@ -108,7 +108,7 @@ ck("基线常量就是 §18.8 实测的那个 100", D.IYUU_BASELINE == 100, f"�
 ck("tag 字面量没被打错", D.IYUU_TAG == "IYUU自动辅种", repr(D.IYUU_TAG))
 
 print("\n=== ② ③ 取数：URL 拼装（含那个中文 tag） ===")
-S = _load(ROOT / "orchestrator" / "state.py", "state_mod")
+S = _load(ROOT / "data" / "orchestrator" / "state.py", "state_mod")
 import urllib.request as _ur
 
 _real = _ur.urlopen

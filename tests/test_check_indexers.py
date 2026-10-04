@@ -32,7 +32,7 @@ sys.stdout.reconfigure(encoding="utf-8")        # 见 tests/README.md：GBK 控�
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
-DRIVE_LOOP = ROOT / "scripts" / "drive-loop.py"
+DRIVE_LOOP = ROOT / "data" / "drive-loop" / "scripts" / "drive-loop.py"
 
 _ok = 0
 _bad = 0

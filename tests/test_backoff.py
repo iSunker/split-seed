@@ -6,6 +6,9 @@
 import os, pathlib, sqlite3, sys, tempfile, datetime
 # 仓库根 = 本文件的上上级目录（tests/ 的上一层）。
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 from orchestrator import state as S
 
 # ★ 输出强制 UTF-8：GBK 控制台下 ⑪(U+246A) 编不出去，会在中途炸掉。
@@ -189,7 +192,7 @@ import importlib.util as _ilu                       # noqa: E402
 
 _spec = _ilu.spec_from_file_location(
     "drive_loop_backoff", str(pathlib.Path(__file__).resolve().parent.parent
-                              / "scripts" / "drive-loop.py"))
+                              / "data" / "drive-loop" / "scripts" / "drive-loop.py"))
 dl = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(dl)
 

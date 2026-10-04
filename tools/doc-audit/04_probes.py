@@ -28,7 +28,7 @@ TOOLS = Path(__file__).resolve().parent
 OUT = TOOLS / "out"
 
 NAS = "//iSunker-DS423"
-COMPOSE_UNC = "%s/docker_ssd/prowlarr_cross-seed_autohardlink" % NAS
+COMPOSE_UNC = "%s/docker_ssd/reseed" % NAS   # ★ 2026-10-05（B2）：改名 + 收进 data/
 
 # ---- 脱敏纪律（**两条都必须有，缺一条就是漏洞**）----
 #   ① **不选可能含凭据的列**。判「哪个站、什么状态」靠 id / name / status 就够，
@@ -89,7 +89,7 @@ def active_indexers():
       真判据是 `retry_after` 有没有到点。
     """
     now_ms = int(time.time() * 1000)
-    con = _ro(COMPOSE_UNC + "/cross-seed/cross-seed.db")
+    con = _ro(COMPOSE_UNC + "/data/cross-seed/cross-seed.db")
     try:
         rows = con.execute(
             "SELECT id, name, status, retry_after FROM indexer ORDER BY id").fetchall()
@@ -107,7 +107,7 @@ def active_indexers():
 
 
 def stages():
-    con = _ro(COMPOSE_UNC + "/drive-loop/hlink/state.db")
+    con = _ro(COMPOSE_UNC + "/data/drive-loop/state/hlink/state.db")
     try:
         return dict(con.execute("SELECT stage, COUNT(*) FROM movie GROUP BY stage").fetchall())
     finally:
@@ -116,7 +116,7 @@ def stages():
 
 def indexer_timestamps():
     """各索引器真的搜出去过几行 —— 判「闸门开了没」。"""
-    con = _ro(COMPOSE_UNC + "/cross-seed/cross-seed.db")
+    con = _ro(COMPOSE_UNC + "/data/cross-seed/cross-seed.db")
     try:
         return con.execute(
             "SELECT i.name, COUNT(t.searchee_id) FROM indexer i "
@@ -162,7 +162,7 @@ def state_db_total():
       就会得到 517 而**看着完全正常**（同 `B.10` 第 14 条那个形状）。
       ⇒ 总数就得真 `COUNT(*)`，不许拿分布的某一格代替。
     """
-    con = _ro(COMPOSE_UNC + "/drive-loop/hlink/state.db")
+    con = _ro(COMPOSE_UNC + "/data/drive-loop/state/hlink/state.db")
     try:
         (n,) = con.execute("SELECT COUNT(*) FROM movie").fetchone()
         return "%d 部（COUNT(*) FROM movie）" % n

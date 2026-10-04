@@ -1306,7 +1306,7 @@ class StateStore:
                 f"       要建库：`reseed-state.py --db <路径> init --pack ...`；"
                 f"要显式建：`StateStore(<路径>, create=True)`。\n"
                 f"       库的真实位置由 drive-loop 的运行目录决定，常见的是 "
-                f"`<compose>/drive-loop/hlink/state.db`。")
+                f"`<state>/hlink/state.db`（<state> = 环境变量 `DRIVE_STATE_DIR` 指的目录）。")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.con = sqlite3.connect(str(self.path))
         self.con.row_factory = sqlite3.Row

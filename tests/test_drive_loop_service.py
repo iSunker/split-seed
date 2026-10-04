@@ -48,6 +48,9 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")   # GBK 控制台会炸（tests/README.md）
@@ -92,10 +95,10 @@ def ck_no(name: str, cond: bool, extra: str = "") -> None:
         print(f"  FAIL {name}（★ 期望为假却为真）{('  —— ' + extra) if extra else ''}")
 
 
-COMPOSE = REPO / "docker-compose.yml"
-RESIDENT = REPO / "scripts" / "drive-loop-resident.sh"
-DOCKER_PY = REPO / "scripts" / "drive-loop.py"
-NAS_SH = REPO / "scripts" / "drive-loop-nas.sh"
+COMPOSE = REPO / "compose.yaml"
+RESIDENT = REPO / "data" / "drive-loop" / "run-resident.sh"
+DOCKER_PY = REPO / "data" / "drive-loop" / "scripts" / "drive-loop.py"
+NAS_SH = REPO / "data" / "drive-loop" / "run.sh"
 DEPLOY = REPO / "deploy.sh"
 MOUNT_SELFCHECK = REPO / "scripts" / "diag" / "drive-loop-mount-selfcheck.sh"
 CHK58 = REPO / "scripts" / "diag" / "chk58.sh"
@@ -191,10 +194,11 @@ if YML and isinstance(svcs.get("drive-loop"), dict):
     #     1:1 ⇒ 基线也是绿的）。补的 ①k2 就是给那种形状的。这里顺手记一笔。
     ck("★ ①h2 没有同时写 command（会变成喂给脚本的多余参数）",
        "command" not in dl, repr(dl.get("command")))
-    #   ★ 绝对路径：镜像 WORKDIR 是 /app，相对路径在容器里找不到（挂载是 1:1 同名同路径）
-    ck("★ ①h3 entrypoint 用**绝对路径**（容器 WORKDIR=/app，相对路径找不到）",
-       "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/run-resident.sh" in _ep_s,
-       _ep_s)
+    #   ★ 绝对路径：镜像 WORKDIR 是 /app；★ 2026-10-05（B2/§8.3）：代码入镜像后
+    #     entrypoint 指向**镜像内**的 `/app/run-resident.sh`（由 Dockerfile COPY 进去），
+    #     不再指向挂载区。
+    ck("★ ①h3 entrypoint = 镜像内 /app/run-resident.sh（绝对路径）",
+       _ep_s.strip() == "sh /app/run-resident.sh", _ep_s)
     _cmd = dl.get("command") or dl.get("entrypoint") or []
     _cmd_s = " ".join(_cmd) if isinstance(_cmd, list) else str(_cmd)
     #   ★★ 这一条就是常驻与 `--once` 的分界。入口上带了它 ⇒ 跑一批就退出。
@@ -208,51 +212,52 @@ if YML and isinstance(svcs.get("drive-loop"), dict):
     ck("★ ①j networks 同时含 reseed-net 与 qbit-net（缺一条就连不上另一个服务）",
        "reseed-net" in _nets and "qbit-net" in _nets, repr(_nets))
 
-    # ---- ①k 两条挂载都是 1:1（左右逐字相等）-------------------------------
-    #   ★★ 2026-09-22 两个修（都只是**当初没被暴露**，不是新引入的）：
-    #     ① `:ro` 后缀此前**从来没被剥掉** —— 旧挂载里那两个时区项若走了这条分支
-    #        会把 `/etc/localtime:/etc/localtime:ro` 判成非 1:1 而**误报**。
-    #        这里改成在**渲染后的 dict 形态**（`source`/`target`）上断言 ——
-    #        Docker 自己已经把 `:ro` 剥进 `read_only` 了，不用我手写解析。
-    #        ★ 教训：**别用字符串切分去解析一个已经有结构化形态的东西**（`A.11`）。
-    #     ② 加 `when`/`read_only` 到跳过的组合里没用 —— 因为下面已经是按 dict 取
-    #        `source`/`target`，根本没碰 `mode`。
-    #   ★★ 但列表里现在**混进了不该看的东西**：`environment:` 被我加成了 YAML 列表
-    #      形态，而 **Docker 的 `environment` 长列表与 `volumes` 长列表长得一样**
-    #      （都是 `- KEY=VALUE`）⇒ 这条断言该显式只取 `volumes`。
+    # ---- ①k 挂载清单（2026-10-05 按「代码入镜像」模型重写）-------------------
+    #   ★★ 旧模型断言"**每条**挂载都 1:1 同名同路径"；新模型下 compose 根仍 1:1
+    #     且 `:ro`，而**运行态**单独挂 `./data/drive-loop/state:/state`（**故意不 1:1**）。
+    #   ⇒ 判据改成**逐条点名**：① compose 根 1:1 只读；② 状态目录挂到 /state；
+    #      ③ 媒体卷 1:1；④ 时区。★ 逐条点名比"全部 1:1"更严 —— 它同时钉住"不许
+    #      再出现上面那种"多挂/少挂一条却不报红"的形状。
+    #   ★ 用**渲染后**的 dict 形态（`source`/`target`/`read_only`）断言 —— Docker 自己
+    #     已经把 `:ro` 剥好了，不用我写字符串切分（`A.11`）。
     _vols = dl.get("volumes") or []
     _envs = dl.get("environment") or []
-    _bad_mounts = []
-    for v in _vols:
-        if isinstance(v, dict):                  # 渲染后：{type,source,target,read_only}
-            src, tgt = v.get("source"), v.get("target")
-        else:
-            parts = str(v).split(":")
-            # ★ `ro`/`rw` 是**模式**不是路径 ⇒ 先剥掉再比（`A.11`：别让判据需要转义）
-            if len(parts) >= 3 and parts[-1] in ("ro", "rw", "z", "Z"):
-                parts = parts[:-1]
-            src, tgt = (parts[0], parts[1]) if len(parts) >= 2 else ("", "")
-        if src != tgt or not src:
-            _bad_mounts.append(str(v))
-    ck("★ ①k 每条挂载都是 1:1 同名同路径（代码里的路径全是绝对的，挑挂会静默退化）",
-       _vols and not _bad_mounts, repr(_bad_mounts or _vols))
-    ck("★★ ①k2 且**没有把 environment 混进 volumes**（Docker 两种长列表形态相同，"
+    _newroot = "/volume2/docker_ssd/reseed"
+
+    def _mt(v):
+        if isinstance(v, dict):
+            return (v.get("source"), v.get("target"), bool(v.get("read_only")))
+        parts = str(v).split(":")
+        ro = len(parts) >= 3 and parts[-1] in ("ro", "rw", "z", "Z")
+        if len(parts) >= 3 and parts[-1] in ("ro", "rw", "z", "Z"):
+            parts = parts[:-1]
+        return (parts[0] if parts else "", parts[1] if len(parts) >= 2 else "", ro)
+
+    _mts = [_mt(v) for v in _vols]
+    ck("★ ①k1 compose 根挂载 = 新根 1:1 且**只读**（代码不再取自这里）",
+       (_newroot, _newroot, True) in _mts, repr(_mts))
+    ck("★ ①k2 运行态卷挂在 /state（`./data/drive-loop/state:/state`，可写）",
+       any(t == "/state" and not ro and s.endswith("data/drive-loop/state")
+           for (s, t, ro) in _mts), repr(_mts))
+    ck("★ ①k3 媒体卷 1:1 整卷（§9：硬链接不能跨卷）",
+       ("/volume1/video", "/volume1/video", False) in _mts, repr(_mts))
+    ck("★★ ①k4 且**没有把 environment 混进 volumes**（Docker 两种长列表形态相同，"
        "写成一样的缩进时 yaml 不会替你分开）",
        all("=" not in str(v) for v in _vols), repr([str(v) for v in _vols]))
-    ck("★★ ①k3 `/etc/timezone` **不在**挂载里 —— 实测 NAS 上没这个文件，"
+    ck("★★ ①k5 `/etc/timezone` **不在**挂载里 —— 实测 NAS 上没这个文件，"
        "Docker 会建个空目录顶上（纯负担）",
        not any("timezone" in str(v) for v in _vols), repr([str(v) for v in _vols]))
-    #   ★ 顺带钉住**必须是整目录/整卷**：挂成子目录会静默退化
-    #   （`first_existing()` 返回 None + 一行 warning），而不是报错。
+    #   ★ 整卷/整目录：挂成子目录会静默退化（`first_existing()` 返回 None + 一行 warning）
     _vol_s = " ".join(str(v) for v in _vols)
-    ck("★ ①l 挂的是整个 compose 目录 + 整个媒体卷（不是挑子目录）",
-       "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink" in _vol_s
-       and "/volume1/video" in _vol_s, _vol_s)
-    #   ★★ 而那两个覆盖口**本来该在 environment 里** —— 上面这条就是它们的地契：
-    #     它们必须在 environment（不是 volumes）下，否则既会踩 ①k，也不会生效。
+    ck("★ ①l 挂的是整个 compose 根 + 整个媒体卷（不是挑子目录）",
+       _newroot in _vol_s and "/volume1/video" in _vol_s, _vol_s)
+    #   ★★ ①l3 三条路径环境变量必须都在 environment 里（代码入镜像的接线，缺一则静默退化）
     _env_s = " ".join(str(v) for v in _envs)
     ck("★★ ①l2 DRIVE_PACKS / DRIVE_LIMIT 在 environment 里（覆盖口，不是挂载）",
        "DRIVE_PACKS" in _env_s and "DRIVE_LIMIT" in _env_s, _env_s)
+    ck("★★ ①l3 DRIVE_STATE_DIR / COMPOSE_DIR / RESEED_STATE_DB 三接线都在 environment 里",
+       "DRIVE_STATE_DIR=/state" in _env_s and f"COMPOSE_DIR={_newroot}" in _env_s
+       and "RESEED_STATE_DB=" in _env_s, _env_s)
 
     # ---- ①m 容器方言：PY / SUDO ----------------------------------------
     _env = dl.get("environment") or []
@@ -856,11 +861,19 @@ ck("★★ ⑤q 哨兵的 KNOWN_NAS 显式登记了 `.state.tmp` 临时名",
 print("\n=== ⑥ deploy.sh：新脚本收进白名单 ===")
 # ==========================================================================
 _DEP = DEPLOY.read_text(encoding="utf-8") if DEPLOY.is_file() else ""
-ck("⑥a deploy.sh 的 FILES 里有 drive-loop-resident.sh → drive-loop/run-resident.sh",
-   '"scripts/drive-loop-resident.sh::drive-loop/run-resident.sh"' in _DEP,
-   "白名单里没有它 ⇒ 部署后容器找不到入口脚本")
-ck("⑥b drive-loop-nas.sh 仍在白名单里（生产那份不能被顶掉）",
-   '"scripts/drive-loop-nas.sh::drive-loop/run.sh"' in _DEP, "run.sh 掉出白名单了")
+# ★★ 2026-10-05（B2/§8.3）：模型改为「代码全在镜像里」⇒ drive-loop 的**代码**
+#   （run-resident.sh / run.sh / drive-loop.py）**不再走 deploy.sh 白名单**，
+#   改由 `drive-loop.Dockerfile` 的 `COPY data/drive-loop/…` 打进镜像。
+#   ⇒ 断言随之翻转：**必须不在 FILES 里**（进了就是"改代码走文件同步"的旧模型回潮），
+#     且**必须在 Dockerfile 的 COPY 里**（否则容器里没有入口脚本）。
+ck("⑥a deploy.sh 的 FILES **不含** drive-loop 代码（已改走镜像）",
+   "drive-loop/run-resident.sh" not in _DEP and "drive-loop/scripts/drive-loop.py" not in _DEP,
+   "drive-loop 代码又回到文件同步白名单了 ⇒ 两个真源，会漂")
+_DLDF = (REPO / "data" / "drive-loop" / "Dockerfile")
+_DLDF_SRC = _DLDF.read_text(encoding="utf-8") if _DLDF.is_file() else ""
+ck("⑥b drive-loop.Dockerfile 把常驻入口 COPY 进镜像（/app/run-resident.sh）",
+   "COPY data/drive-loop/run-resident.sh /app/run-resident.sh" in _DLDF_SRC,
+   "镜像里没有入口脚本 ⇒ compose 的 entrypoint /app/run-resident.sh 找不到文件")
 #   ★ chk58.sh **故意不进** FILES（它是 NAS 侧诊断件，不部署）——
 #     这条钉的是"别顺手把它加进去"（加了就是**假一致**：生产上有个没人调的脚本）。
 #   ★★ 2026-09-29 修正判据**取法**（原来的写法被一次**注释**弄红了，留痕）：

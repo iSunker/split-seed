@@ -62,6 +62,9 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+# ★ 2026-10-05（B2）：容器代码收进 data/ ⇒ orchestrator / drive-loop 源码
+#   都在 data/ 下。把 data/ 也加进 import 搜索路径（本文件上一行插的是仓库根）。
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "data"))
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -112,10 +115,16 @@ _DEPLOYED = {s.split("::")[0].strip() for s in _DEPLOYED if isinstance(s, str)}
 check("前提：FILES 里解析出了源路径", len(_DEPLOYED) > 0, repr(sorted(_DEPLOYED))[:200])
 
 _local_rx = [rx for rx, _why in M.LOCAL_ONLY]
+# ★★ 2026-10-05（B3）：第三条路 —— **走镜像**（IMAGE_ONLY）。哨兵 B 方向已加这一类
+#   （判据：既不进 FILES、也不进 LOCAL_ONLY，但**在容器里跑**，靠 build 进镜像）。
+#   ⇒ 本测试的 `_declared()` 必须跟着认它，否则会把 data/orchestrator/* 误报成"未表态"。
+_image_rx = [rx for rx, _why in getattr(M, "IMAGE_ONLY", [])]
 
 
 def _declared(rel: str) -> bool:
-    return rel in _DEPLOYED or any(re.search(rx, rel) for rx in _local_rx)
+    return (rel in _DEPLOYED
+            or any(re.search(rx, rel) for rx in _local_rx)
+            or any(re.search(rx, rel) for rx in _image_rx))
 
 
 # ★★ 哨兵 B 方向**只看已跟踪文件**（`git ls-files`）—— 这里照抄同一条口径：
