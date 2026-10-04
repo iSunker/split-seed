@@ -254,8 +254,16 @@ def packs_from_arg(spec: str | None) -> list[str]:
 #   那种情况不会报错，只是变慢，属于最难查的一类。
 #   要回退：取消下面那行的注释即可（代码本身没错，是场景没了）。
 # in-place: cross-seed 目录改为可注入（见上方 STATE_DIR 段）。默认回退到**新根**。
+# ★★ 2026-10-05（B6 实测补）：`COMPOSE_DIR` 是**仓库根**（含 `.env` / `build-farm.sh`），
+#   但 2026-10-05 的结构重构把 **cross-seed 运行时数据收进了 `data/`**
+#   （`cross-seed/cross-seed.db`、`cross-seed/logs/info.current.log`、
+#   `hlink/` 清单）。⇒ 只搜 `COMPOSE_DIR` 一层会**全部落空**，正是
+#   `first_existing()` 的静默退化形状（日报 `packpct=0`，§26.15）。
+#   ⇒ 依次搜 **根** 与 **根/data** 两层（`first_existing()` 取第一个存在的）。
+_COMPOSE_ROOT = os.environ.get("COMPOSE_DIR") or "/volume2/docker_ssd/reseed"
 CROSSSEED_DIRS = (
-    os.environ.get("COMPOSE_DIR") or "/volume2/docker_ssd/reseed",
+    _COMPOSE_ROOT,
+    str(Path(_COMPOSE_ROOT) / "data"),
     # [电脑端已退役 2026-09-12] 原本是 Windows 经 SMB 跑时的兜底路径：
     # "//iSunker-DS423/docker_ssd/reseed",
 )

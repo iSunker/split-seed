@@ -191,6 +191,13 @@ fi
 #   hlink/ 本来就是本项目放元数据的地方 —— config.yml 在那儿，compose 里
 #   `./hlink:/config` 也是这个意思。**农场本身不动**，只是在硬盘上换了个记账本的位置。
 MANIFEST_DIR="$COMPOSE_DIR/hlink"
+# ★★ 2026-10-05（B6 实测补）：结构重构后 `hlink/` 收进了 `data/`
+#   （compose 里 `./data/hlink:/config`）。而 `COMPOSE_DIR` = **仓库根**
+#   ⇒ 先试根下的 `hlink/`，没有就试 `data/hlink/`（**已存在**的那层优先，
+#   免得每次跑都新造一个空 `hlink/`）。两者都没有时退回根下 `hlink/`（原地创建）。
+if [ ! -d "$MANIFEST_DIR" ] && [ -d "$COMPOSE_DIR/data/hlink" ]; then
+  MANIFEST_DIR="$COMPOSE_DIR/data/hlink"
+fi
 mkdir -p "$MANIFEST_DIR" 2>/dev/null || die "建不出清单目录: $MANIFEST_DIR"
 MANIFEST="$MANIFEST_DIR/.$(basename "$FARM").manifest.tsv"
 

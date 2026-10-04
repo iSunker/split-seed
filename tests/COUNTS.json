@@ -6,7 +6,7 @@
     "test_deploy_gate.py": 9,
     "test_drift_junk.py": 12,
     "test_drift_lists.py": 14,
-    "test_drive_loop_service.py": 127,
+    "test_drive_loop_service.py": 130,
     "test_due_indexer_name.py": 20,
     "test_farm_root.py": 18,
     "test_first_explore_budget.py": 19,
@@ -90,7 +90,7 @@
     "test_watch_containers_loop.py": "`scripts/diag/watch-containers-loop.sh`（常驻循环入口，2026-09-29 加）—— 它跑在 `reseed-watcher` 容器里，而那个容器是 `restart: always` ⇒ 本文件的**全部价值**是「**它一直在**」。钉三条：① 单轮 `rc≠0`（1=拉不起来 / 2=查不了）**绝不终止循环** —— 否则一次故障会被 docker 的 `always` **放大成重启风暴**，且现场被冲掉；② **每轮打带时间戳的心跳**（轮次号+时刻）—— 这是唯一能区分「在跑」与「循环卡死的假在跑」的东西（`always` 不管卡死；这也正是「选项 (C)」的洞）；③ `--compose` **只传一次**（实测 bug：循环自己拼一个 + 调用方透传一个 ⇒ `watch-containers.sh` 最后一个赢 ⇒ 默认值被**静默覆盖**，而报告头打的是覆盖后的值 ⇒ 看着正常）。变异（加回「按 rc 退出」）⇒ 恰好 5 条红。<br>★ **2026-10-01 增（④b 段）**：循环现在也透传 `--compose-qb`（项目 B 目录）。★★ 与 ④ 段**完全同族**的坑：循环自己拼一个 `--compose-qb`，调用方若再透传一个 ⇒ 命令行上**两个** ⇒ `watch-containers.sh` \"最后一个赢\" ⇒ **默认值静默覆盖调用方的**（报告头看着一切正常）。判据成对：① 正例 `COMPOSE_DIR_QB=` 必须是**调用方传的**（不含 `/volume2/`）；② **阴性对照** —— 把默认 NAS 路径喂进同一判据必须**判得红**（防恒真）。"
   },
   "scripts": 43,
-  "total": 1637,
+  "total": 1640,
   "failures": 0,
   "failed_files": [],
   "measured_at": "2026-10-04",

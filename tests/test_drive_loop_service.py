@@ -1179,6 +1179,38 @@ print("  --   ⑨d `phase` 翻转频率（60s/拍）⇒「cat 一次不算取证
       "要真常驻进程 + 两个时刻各读一次；**不是通过**")
 
 # ==========================================================================
+print("\n=== ⑩ CROSSSEED_DIRS / MANIFEST_DIR：`data/` 也要搜（B6 实测补）===")
+# ==========================================================================
+#   ★★ 为什么单列一段：2026-10-05 把 cross-seed 运行时数据收进 `data/` 之后，
+#      `COMPOSE_DIR`（= 仓库根，含 `.env` / `build-farm.sh`）**不再是**它们所在的那层
+#      （`cross-seed/cross-seed.db`、`logs/info.current.log`、`hlink/` 都在 `data/` 下）。
+#      只搜根一层 ⇒ `first_existing()` 全部落空 ⇒ **静默退化**（日报 packpct=0，§26.15）。
+#      ⇒ 这条钉住"根 **与** 根/data 两层都搜"（本机 AST，能红）。
+if _TREE is not None:
+    _cd_dirs = None
+    _cd_root = None
+    for _n in ast.walk(_TREE):
+        if isinstance(_n, ast.Assign):
+            for _t in _n.targets:
+                if getattr(_t, "id", None) == "CROSSSEED_DIRS":
+                    _cd_dirs = _n.value
+                if getattr(_t, "id", None) == "_COMPOSE_ROOT":
+                    _cd_root = _n.value
+    ck("前提：drive-loop.py 里有模块级 `CROSSSEED_DIRS` 赋值", _cd_dirs is not None,
+       "找不到 CROSSSEED_DIRS 赋值")
+    #   判据用**源码文本**而不是 AST 结构：`CROSSSEED_DIRS` 现在是元组字面量，
+    #   第二个元素 = `str(Path(_COMPOSE_ROOT) / "data")` ⇒ 源码里必须有 `"data"`。
+    _cd_seg = ast.get_source_segment(_SRC, _cd_dirs) if _cd_dirs is not None else None
+    ck("★★ ⑩a `CROSSSEED_DIRS` 里包含 `data` 子层（否则收进 data/ 的 db/日志全落空）",
+       bool(_cd_seg) and '"data"' in _cd_seg,
+       repr(_cd_seg)[:200] if _cd_seg else "取不到源码段")
+    _bf = REPO / "data" / "drive-loop" / "scripts" / "build-farm.sh"
+    _bf_src = _bf.read_text(encoding="utf-8") if _bf.is_file() else ""
+    ck("★★ ⑩b `build-farm.sh` 的 MANIFEST_DIR 也回退到 `data/hlink`（否则农场清单落在新目录）",
+       'COMPOSE_DIR/data/hlink' in _bf_src,
+       "build-farm.sh 里没有 data/hlink 回退 ⇒ 清单会落到根下的新 hlink/")
+
+# ==========================================================================
 print(f"\n{'=' * 60}")
 print(f"断言 {_ok + _bad} 条：{_ok} 过 / {_bad} 失败")
 if not _DOCKER:
