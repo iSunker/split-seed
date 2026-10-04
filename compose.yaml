@@ -120,7 +120,21 @@ services:
     ports:
       - "2468:2468"
     depends_on: [prowlarr]
-    networks: [reseed-net, qbit-net]
+    # ★★ 2026-10-05（B6 上线实测）：给 cross-seed 在 **qbit-net 上钉一个固定 IP**。
+    #   起因：qB 的 WebUI 有 `web_ui_max_auth_fail_count=5` + `web_ui_ban_duration=3600`
+    #   —— **按来源 IP 封禁**。cross-seed 起来后若反复用**同一个** 172.29.0.x 登录失败
+    #   （首部署时 qB 白名单没有 172.x、且我们还没注入凭据 ⇒ 必然失败），那个 IP 就被
+    #   qB 封 1 小时；此后即使凭据正确，**同一个 IP 仍吃 403**
+    #   （实测：直连返回体 =「身份认证失败次数过多，您的 IP 地址已被封禁」）。
+    #   ★ Docker 的 IPAM 会**优先复用**上次那个 IP ⇒ 光 `--force-recreate` 换不掉它，
+    #     必须显式钉一个地址。钉在 `.10`（当前 .2=qB/.4=drive-loop/.5=qbit_manage 之外）。
+    #   ★ 这是**我们自己的 compose** 的改动，**不碰 qB 的 conf**（用户硬约束）。
+    #   ★ 反向：`wait-for-qb.sh` 会真登录校验（`QBIT_URL_CRED`），一旦某 IP 被封它只会
+    #     "继续等"到 300s 超时 —— 所以固定 IP 也便于**人一眼看出**是哪个地址被封。
+    networks:
+      reseed-net: {}
+      qbit-net:
+        ipv4_address: 172.29.0.10
     logging: *logging-limits
     restart: unless-stopped
 
