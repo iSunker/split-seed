@@ -190,15 +190,30 @@ fi
 #   哪些是媒体、哪些是本项目的元数据（实测就是在这儿看见 .tmp 残留才发现清单放错地方）。
 #   hlink/ 本来就是本项目放元数据的地方 —— config.yml 在那儿，compose 里
 #   `./hlink:/config` 也是这个意思。**农场本身不动**，只是在硬盘上换了个记账本的位置。
-MANIFEST_DIR="$COMPOSE_DIR/hlink"
-# ★★ 2026-10-05（B6 实测补）：结构重构后 `hlink/` 收进了 `data/`
-#   （compose 里 `./data/hlink:/config`）。而 `COMPOSE_DIR` = **仓库根**
-#   ⇒ 先试根下的 `hlink/`，没有就试 `data/hlink/`（**已存在**的那层优先，
-#   免得每次跑都新造一个空 `hlink/`）。两者都没有时退回根下 `hlink/`（原地创建）。
-if [ ! -d "$MANIFEST_DIR" ] && [ -d "$COMPOSE_DIR/data/hlink" ]; then
-  MANIFEST_DIR="$COMPOSE_DIR/data/hlink"
-fi
-mkdir -p "$MANIFEST_DIR" 2>/dev/null || die "建不出清单目录: $MANIFEST_DIR"
+# ★★ 2026-10-05（B6 实测修正）：**只往"可写"的目录里落清单**。
+#   起因（NAS 实测，退出码 2）：drive-loop 容器把 compose 根挂成 **`:ro` 只读**
+#   （`/volume2/docker_ssd/reseed:/volume2/docker_ssd/reseed:ro`），而清单曾被指到
+#   `data/hlink/` ⇒ 写 `.names.tmp` 时报 `Read-only file system` ⇒ 农场巡检整个挂掉。
+#   ★ 容器里**唯一可写**的挂载是 `/state`（= `data/drive-loop/state`）。
+#   ⇒ 取值优先级：`FARM_MANIFEST_DIR`（显式覆盖，容器里由 `drive-loop.py::_run_verify`
+#     设成 `/state/hlink`）> `$COMPOSE_DIR/hlink` > `$COMPOSE_DIR/data/hlink`
+#     > `$DRIVE_STATE_DIR/hlink`（容器里 = /state/hlink）。
+#   判据是 **"能不能写"**，不是"存不存在" —— 因为只读挂载下目录存在但写不进去。
+_pick_manifest_dir() {
+  for _c in "$FARM_MANIFEST_DIR" "$COMPOSE_DIR/hlink" "$COMPOSE_DIR/data/hlink" \
+            "${DRIVE_STATE_DIR:+$DRIVE_STATE_DIR/hlink}"; do
+    [ -n "$_c" ] || continue
+    # 已存在则直接测可写；不存在则试着建（建得起来即可写）
+    if [ -d "$_c" ]; then
+      [ -w "$_c" ] && { echo "$_c"; return; }
+    else
+      mkdir -p "$_c" 2>/dev/null && { echo "$_c"; return; }
+    fi
+  done
+  echo ""   # 一个都没有 ⇒ 交给下面 die 报错（别静默退化）
+}
+MANIFEST_DIR="$(_pick_manifest_dir)"
+[ -n "$MANIFEST_DIR" ] || die "找不到可写的清单目录（试过 FARM_MANIFEST_DIR / \$COMPOSE_DIR/hlink / data/hlink / \$DRIVE_STATE_DIR/hlink）"
 MANIFEST="$MANIFEST_DIR/.$(basename "$FARM").manifest.tsv"
 
 # 旧落点的清单搬过来（只搬一次；新位置已有就**不覆盖** —— 免得把新的盖回旧的）

@@ -2468,7 +2468,14 @@ def _run_verify(argv: list[str]) -> tuple[int, str]:
             timeout=FARM_CHECK_TIMEOUT_SEC,
             # ★ 显式传 COMPOSE_DIR：脚本里的默认值是写死的 NAS 绝对路径，
             #   这里用脚本自己所在的目录覆盖掉它 —— 以后装到别处也不用改脚本。
-            env={**os.environ, "COMPOSE_DIR": str(Path(argv[1]).parent)},
+            # ★★ 2026-10-05（B6 实测修正）：再传 **FARM_MANIFEST_DIR**。
+            #   缘由：drive-loop 容器把 compose 根挂成 **`:ro`** ⇒ build-farm.sh 往
+            #   `data/hlink/` 写清单会 `Read-only file system` ⇒ 农场巡检退 2。
+            #   容器里**唯一可写**的是 `/state`（= STATE_DIR）⇒ 清单落到 `$STATE_DIR/hlink`。
+            #   ★ 本机开发机跑时 STATE_DIR = HERE（可写），行为不变。
+            env={**os.environ,
+                 "COMPOSE_DIR": str(Path(argv[1]).parent),
+                 "FARM_MANIFEST_DIR": str(STATE_DIR / "hlink")},
         )
         return p.returncode, p.stdout.decode("utf-8", "replace")
     except subprocess.TimeoutExpired:

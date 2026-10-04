@@ -1206,9 +1206,13 @@ if _TREE is not None:
        repr(_cd_seg)[:200] if _cd_seg else "取不到源码段")
     _bf = REPO / "data" / "drive-loop" / "scripts" / "build-farm.sh"
     _bf_src = _bf.read_text(encoding="utf-8") if _bf.is_file() else ""
-    ck("★★ ⑩b `build-farm.sh` 的 MANIFEST_DIR 也回退到 `data/hlink`（否则农场清单落在新目录）",
-       'COMPOSE_DIR/data/hlink' in _bf_src,
-       "build-farm.sh 里没有 data/hlink 回退 ⇒ 清单会落到根下的新 hlink/")
+    ck("★★ ⑩b `build-farm.sh` 的清单目录**只往可写的地方落**"
+       "（容器把 compose 根挂成 :ro ⇒ 写 data/hlink 会 Read-only file system，退 2）",
+       "FARM_MANIFEST_DIR" in _bf_src and "_pick_manifest_dir" in _bf_src,
+       "build-farm.sh 没有可写性筛选 ⇒ 容器里农场巡检会挂")
+    ck("★★ ⑩c `drive-loop.py::_run_verify` 传了 `FARM_MANIFEST_DIR`（指向 STATE_DIR/hlink）",
+       "FARM_MANIFEST_DIR" in _SRC and 'str(STATE_DIR / "hlink")' in _SRC,
+       "没传 ⇒ build-farm 回退到只读的 compose 根 ⇒ 退 2")
 
 # ==========================================================================
 print(f"\n{'=' * 60}")
