@@ -89,51 +89,78 @@ def _load(path, name):
 # --------------------------------------------------------------------------- #
 
 print("== ① notify：键里的空格要被规范化，且**不许**再伪造出 `pack=` 键 ==")
+# ★★ 2026-10-04：`notify.py` 已**整体剥离**到独立项目（见 `重构方案.md` §11）
+#   ⇒ 仓库里可能不再有 `scripts/notify.py`。本段**降级而非删除**：
+#     · 若文件在（本地还没清 / NAS 上仍留一份）⇒ 照旧跑**全部**断言；
+#     · 若文件不在 ⇒ 打印一条 SKIP，**但仍跑 ①d 那段阴性对照**（它是纯字符串复刻、
+#       不依赖 notify.py）—— 否则「键规范化」这条判据会**静默消失**，
+#       而它钉的正是「含空格键会伪造出 `pack=`、污染下游批次计数」这个真缺陷。
 NOTIFY = REPO / "scripts" / "notify.py"
-NT = _load(NOTIFY, "notify_pack_progress")
+if NOTIFY.is_file():
+    NT = _load(NOTIFY, "notify_pack_progress")
+    _HAVE_NOTIFY = True
+else:
+    NT = None
+    _HAVE_NOTIFY = False
+    print("  SKIP  ① notify.py 缺失（通知模块已剥离）——跳过依赖它的断言，"
+          "保留纯字符串的阴性对照")
 
-_n = NT.Notifier.__new__(NT.Notifier)
-_n.host = "lab"
+if _HAVE_NOTIFY:
+    _n = NT.Notifier.__new__(NT.Notifier)
+    _n.host = "lab"
 
+    def _metrics_line(pairs: dict) -> str:
+        ev = NT.Event(kind="batch", title="t", metrics=pairs)
+        out = _n._render(ev, 0.0)
+        return [ln for ln in out.splitlines() if ln.startswith("metrics:")][0]
 
-def _metrics_line(pairs: dict) -> str:
-    ev = NT.Event(kind="batch", title="t", metrics=pairs)
-    out = _n._render(ev, 0.0)
-    return [ln for ln in out.splitlines() if ln.startswith("metrics:")][0]
+    def _keys_of(line: str) -> list:
+        """复刻 NAS 侧 awk 的切法：按**单个空格**切开，取第一个 `=` 之前的整串。"""
+        body = line.split("metrics: ", 1)[1]
+        out = []
+        for tok in body.split(" "):
+            p = tok.find("=")
+            if p > 0:
+                out.append(tok[:p])
+        return out
 
+    # ①a 含空格的键：规范化后键**原样连在一起**（不再裂开）
+    line = _metrics_line({"seeding:my pack": 1, "ok": 50})
+    ck("含空格键 → 键被规范化", "seeding:my_pack=1" in line, True)
+    ck("含空格键 → 切出的键列表", _keys_of(line), ["seeding:my_pack", "ok"])
 
-def _keys_of(line: str) -> list:
-    """复刻 NAS 侧 awk 的切法：按**单个空格**切开，取第一个 `=` 之前的整串。"""
-    body = line.split("metrics: ", 1)[1]
-    out = []
-    for tok in body.split(" "):
-        p = tok.find("=")
-        if p > 0:
-            out.append(tok[:p])
-    return out
+    # ①b ★★ 关键断言：**不许**出现键恰好等于 `pack` 的碎片
+    ck_true("★ 不再伪造出 `pack=` 键（否则该行会被误计为一批）",
+            "pack" not in _keys_of(line),
+            f"切出的键={_keys_of(line)!r}")
 
+    # ①c 值里的空格照旧被规范化（原有行为，不许被本次改动破坏）
+    line_v = _metrics_line({"seeding:x": "frds top"})
+    ck("值含空格 → 值的空格仍换成下划线", "seeding:x=frds_top" in line_v, True)
 
-# ①a 含空格的键：规范化后键**原样连在一起**（不再裂开）
-line = _metrics_line({"seeding:my pack": 1, "ok": 50})
-ck("含空格键 → 键被规范化", "seeding:my_pack=1" in line, True)
-ck("含空格键 → 切出的键列表", _keys_of(line), ["seeding:my_pack", "ok"])
+    # ①d ★ 阴性对照：这条判据**必须能红** —— 直接复刻**旧写法**（键不换空格）
+    _old = " ".join(f"{NT._clean_line(str(k))}={NT._clean_line(str(v)).replace(' ', '_')}"
+                    for k, v in {"seeding:my pack": 1, "ok": 50}.items())
+    _old_line = f"metrics: {_old}"
+    ck_true("★ 阴性对照：旧写法（键不换空格）**确实**会伪造出 `pack` 键",
+            "pack" in _keys_of(_old_line),
+            f"旧写法切出={_keys_of(_old_line)!r} —— 若这里不红，说明上面那条断言恒真")
+else:
+    # ★ notify.py 不在时，也要有一条**不依赖它**的阴性对照撑着这段的判据 ——
+    #   用**纯字符串**复刻「旧写法按键里的空格切开 ⇒ 会裂出 `pack`」这个事实。
+    def _keys_of_raw(line: str) -> list:
+        body = line.split("metrics: ", 1)[1]
+        out = []
+        for tok in body.split(" "):
+            p = tok.find("=")
+            if p > 0:
+                out.append(tok[:p])
+        return out
 
-# ①b ★★ 关键断言：**不许**出现键恰好等于 `pack` 的碎片
-ck_true("★ 不再伪造出 `pack=` 键（否则该行会被误计为一批）",
-        "pack" not in _keys_of(line),
-        f"切出的键={_keys_of(line)!r}")
-
-# ①c 值里的空格照旧被规范化（原有行为，不许被本次改动破坏）
-line_v = _metrics_line({"seeding:x": "frds top"})
-ck("值含空格 → 值的空格仍换成下划线", "seeding:x=frds_top" in line_v, True)
-
-# ①d ★ 阴性对照：这条判据**必须能红** —— 直接复刻**旧写法**（键不换空格）
-_old = " ".join(f"{NT._clean_line(str(k))}={NT._clean_line(str(v)).replace(' ', '_')}"
-                for k, v in {"seeding:my pack": 1, "ok": 50}.items())
-_old_line = f"metrics: {_old}"
-ck_true("★ 阴性对照：旧写法（键不换空格）**确实**会伪造出 `pack` 键",
-        "pack" in _keys_of(_old_line),
-        f"旧写法切出={_keys_of(_old_line)!r} —— 若这里不红，说明上面那条断言恒真")
+    _old_line = "metrics: seeding:my pack=1 ok=50"   # 键 `seeding:my pack` 未规范化
+    ck_true("★ 阴性对照（不依赖 notify.py）：未规范化的键确实会裂出 `pack` 键",
+            "pack" in _keys_of_raw(_old_line),
+            f"切出={_keys_of_raw(_old_line)!r} —— 这正是剥离后仍需守住的缺陷")
 
 # --------------------------------------------------------------------------- #
 # ② pack_progress：结构化输出 + 空集 ≠ 读不到

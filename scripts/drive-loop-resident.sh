@@ -9,6 +9,8 @@
 #   `drive-loop/run-resident.sh` （仓库里：**本文件**）
 #       ★ 容器**内**常驻跑的那份。**不带** `--once` —— 循环在 python 里，
 #         DSM 那侧只管「容器还活着吗」。
+#       ★★ 2026-10-05 起本文件**打进镜像**（`COPY … /app/run-resident.sh`），
+#          compose 的 `entrypoint` = `sh /app/run-resident.sh`；**不再从挂载区读**。
 #   `scripts/diag/drive-loop-docker.sh`
 #       **已作废**的 `docker run` 草案（取代它的是 `compose.yaml` 里的
 #       `drive-loop` 服务）。留着是为了留痕，不部署。见文件头。
@@ -84,15 +86,36 @@
 # =====================================================================
 set -eu
 
+# ★★★ 代码定位模型：**代码全在镜像里**（2026-10-05 起，`重构方案 §8.3`）★★★
+# ---------------------------------------------------------------------
+#   本脚本与它要跑的 `drive-loop.py` **都在镜像里**（由 `drive-loop.Dockerfile`
+#   COPY 到 `/app/`，compose 的 `entrypoint` 是 `sh /app/run-resident.sh`）。
+#   ⇒ **不再有"挂载那份代码"这回事** ⇒ §26.15 那个"三个副本、生产读到旧的"
+#     的静默事故**从结构上消失**（单一真源 = 镜像）。
+#
+#   ★ 于是路径推导从「`$0` 反推 compose 目录」改成「**显式环境变量**」：
+#     · `APP_DIR`        代码所在（镜像内 `/app`）—— `$0` 就在它下面，直接取。
+#     · `DRIVE_STATE_DIR` 运行态目录（6 个 `.state` + `attempts.log`）——
+#                        compose 挂 `./data/drive-loop/state:/state`，本变量 = `/state/scripts`。
+#     · `COMPOSE_DIR`     cross-seed compose 根（读 `.env` / `cross-seed.db` / 农场 manifest）——
+#                        compose 传新根（`/volume2/docker_ssd/reseed`）。
+#   ★ 三者**都必须**在 compose 的 `environment:` 里显式给；这里只保留**能自洽**的兜底，
+#     且兜底一律走 `HERE`（=`/app`）而不是去猜宿主路径 —— 猜错会静默读到旧/空文件
+#     （正是本仓最怕的那种坏法）。
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-COMPOSE_DIR=$(dirname -- "$SELF_DIR")
+: "${APP_DIR:=$SELF_DIR}"
+#: 运行态目录：默认放在 SELF_DIR 下（**容器里是 `/app`，只读镜像层 ⇒ 会失败**）
+#: ⇒ 生产**必须**由 compose 传 `DRIVE_STATE_DIR=/state/scripts` 指到挂载卷。
+STATE_DIR="${DRIVE_STATE_DIR:-$SELF_DIR/scripts}"
+#: cross-seed compose 根。兜底 = 改名后的新根（与 `drive-loop.py` 的 `CROSSSEED_DIRS` 默认一致）。
+: "${COMPOSE_DIR:=/volume2/docker_ssd/reseed}"
 
 #: python 解释器。★ 容器里是 PATH 上的 `python`（镜像 `python:3.12-slim`）；
 #: `/usr/bin/python3` 是 DSM 自带的，容器里**没有**。默认值给容器那个，
 #: 宿主机上要跑就得显式 `PY=/usr/bin/python3 sh run-resident.sh`（不推荐，见文件头）。
 PY="${PY:-python}"
-SCRIPT="$SELF_DIR/scripts/drive-loop.py"
-ATTEMPTS="$SELF_DIR/attempts.log"
+SCRIPT="$APP_DIR/scripts/drive-loop.py"
+ATTEMPTS="$STATE_DIR/attempts.log"
 
 #: ★ 容器的 TZ 由 compose 的 `environment:` 给（`TZ=Asia/Shanghai`），但常驻进程
 #:   可能被 `docker exec sh` 之类的方式拉起来，那条路不走 compose 的 environment。
@@ -113,19 +136,25 @@ if ! command -v "$PY" >/dev/null 2>&1; then
   exit 127
 fi
 if [ ! -f "$SCRIPT" ]; then
-  echo "[!!] 找不到 $SCRIPT —— deploy.sh 同步过了吗？" >&2
+  echo "[!!] 找不到 $SCRIPT —— 镜像里缺 drive-loop.py？" >&2
+  echo "     ★ 代码**全在镜像里**（§8.3）；本脚本不再看挂载。⇒ 重建镜像并重新部署。" >&2
   echo "[$(date '+%F %T')] [resident] exit=127 (no script: $SCRIPT)" >> "$ATTEMPTS"
   exit 127
 fi
 
-# ---- 闸 ⓪：读到的**是不是这一版代码**（2026-09-18 立，SUMMARY §26.15）----
+# ---- 闸 ⓪：读到的**是不是这一版代码**（2026-09-18 立；2026-10-05 模型变更后仍留）----
 # ★★ 为什么需要它 —— 一次真实的静默事故：
-#   `drive-loop.py` 在**两个地方**各有一份：镜像里 `COPY` 的 `/app/scripts/` 那份，
-#   与挂载进来的 `<compose>/drive-loop/scripts/` 那份。生产**应当**读挂载那份
-#   （`$SCRIPT` 就是这么算的），而 2026-09-18 实测：Part B 的新渲染**从未生效** ——
-#   全 7 天日报的 metrics 里 `packpct` 都是 0，三个位置的 `.py` 是**三个不同文件**
-#   （镜像那份连 `PHASE_IDLE` 都没有）。
+#   `drive-loop.py` 曾在**两个地方**各有一份：镜像里 `COPY` 的 `/app/scripts/` 那份，
+#   与挂载进来的 `<compose>/drive-loop/scripts/` 那份。生产**应当**读挂载那份，
+#   而 2026-09-18 实测：Part B 的新渲染**从未生效** —— 全 7 天日报的 metrics 里
+#   `packpct` 都是 0，三个位置的 `.py` 是**三个不同文件**（镜像那份连 `PHASE_IDLE`
+#   都没有）。
 #   ⇒ 症状是"日报少了几个数"，**不报错、不退非零、日志一切正常** —— 最难查的那种。
+#
+# ★★ 2026-10-05 起模型改为「**代码全在镜像里**」（§8.3）：`$SCRIPT` 现在**就是**
+#   镜像里那份（`/app/scripts/drive-loop.py`），"挂载盖住镜像"这条病根**已从结构上去掉**。
+#   ⇒ 本闸门**不再防"读到挂载旧副本"**（那种情形没有了），改成防**镜像本身是旧版**
+#     （docker load 没做、或拉到了旧 tag）。★ 所以下面提示语随之改写。
 #
 # ★ 判据选 `PHASE_IDLE` 的理由：它同时是
 #   ① 「镜像早于 §26.5」的充分标志（那次修复新加的常量，旧版**不含**它）；
@@ -137,12 +166,12 @@ fi
 #     所以必须写在 `if` 条件里（`if` 的条件不受 `set -e` 约束），别写成裸语句。
 if ! grep -q 'PHASE_IDLE' "$SCRIPT" 2>/dev/null; then
   echo "[!!] $SCRIPT 里没有 PHASE_IDLE —— 这是 §26.5 之前的旧版代码。" >&2
-  echo "     ★ 不是「没同步」：文件在、但**版本旧**。多半是镜像里 COPY 的旧副本被读到了。" >&2
-  echo "     ⇒ 重建镜像并 docker load 到 NAS（见 scripts/drive-loop.Dockerfile 顶部两条纪律），" >&2
-  echo "       或核对挂载有没有盖住 /app。判据（NAS，单行，★ 只比 notify.py）：" >&2
-  echo "       docker compose --profile drive-loop exec drive-loop md5sum /app/scripts/notify.py drive-loop/scripts/notify.py" >&2
-  echo "       ★ 不要拿 drive-loop.py 的两份 md5 相比：镜像是 CRLF、挂载是 LF ⇒ 恒假（SUMMARY §26.56 四）" >&2
-  echo "[$(date '+%F %T')] [resident] exit=3 (stale code: $SCRIPT)" >> "$ATTEMPTS"
+  echo "     ★ 文件在、但**版本旧**：说明**镜像本身**是旧的（docker load 没做 / 拉错了 tag）。" >&2
+  echo "     ⇒ 重建镜像并 docker load 到 NAS（见 scripts/drive-loop.Dockerfile 顶部两条纪律）。" >&2
+  echo "     判据（NAS，单行，★ 只比 notify.py）：" >&2
+  echo "       docker compose --profile drive-loop exec drive-loop md5sum /app/scripts/notify.py" >&2
+  echo "       ★ 2026-10-05 起生产只读镜像那份（不再有挂载副本）⇒ 只需回读 /app。" >&2
+  echo "[$(date '+%F %T')] [resident] exit=3 (stale image: $SCRIPT)" >> "$ATTEMPTS"
   exit 3
 fi
 
@@ -171,7 +200,7 @@ echo "[$(date '+%F %T')] [resident] start  py=$PY" >> "$ATTEMPTS"
 #     **已知**情形（`mode` 缺失或不是 resident）。它**挡不住**"两条常驻容器同时起来"
 #     —— 那种情形要靠 compose 的单实例语义（同一 `container_name` 起不了两个）
 #     与 `profiles` 锁（见 `compose.yaml` 里 `drive-loop` 服务那段）。
-STATE="$SELF_DIR/scripts/.drive-loop.state"
+STATE="$STATE_DIR/.drive-loop.state"
 if [ -f "$STATE" ]; then
     # 只读两个字段；用 python 而不是 grep/sed —— 状态文件是 JSON，
     # 而 `sed` 抠 JSON 在"键顺序变了 / 值被格式化"时会静默抠错（本项目已踩过一次）。

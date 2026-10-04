@@ -33,7 +33,7 @@
 --------------------------------------------------------
 NAS 侧用 DSM 任务计划，每 15 分钟唤醒一次：
   控制面板 → 任务计划 → 用户定义的脚本，用户选 root，频率「每 15 分钟」
-  脚本 = sh /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/run.sh
+  脚本 = sh <compose>/drive-loop/run.sh   （<compose> = NAS compose 目录，见下方 CROSSSEED_DIRS 段）
 
 `--once` 模式下每次唤醒只跑一批。批间隔 = `max(--min-sleep, 上一批 next_sleep 的结论)`，
 由 `.drive-loop.state` 的 `last_sleep_sec` 跨进程传递 —— 于是「站点在退避就缓一缓」
@@ -84,12 +84,32 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
+# --------------------------------------------------------------------------- #
+# ★★ 2026-10-04：运行时目录「**可注入**」（为 `data/` 收拢 + 代码入镜像）
+# --------------------------------------------------------------------------- #
+# 背景：本次重构把 drive-loop 的**代码搬进镜像**（`/app/…`），只把**运行时状态**
+#   与**配置**留在挂载卷里。于是 `__file__` 所在目录（`HERE`）**不再是**运行时数据目录
+#   —— 它变成只读的镜像路径。若继续用它写 `.state`/日志，容器一重建就全丢，
+#   跨进程互斥闸门（`.drive-loop.state` 的 pid/心跳）也会失明。
+#
+# ⇒ 拆出一个**可注入**的状态目录（有默认回退 ⇒ 本机/旧部署行为**逐字不变**）：
+#     · `STATE_DIR` —— 6 个 `.state` 文件 + `drive-loop.log` 的落点。
+#       植入方式：环境变量 `DRIVE_STATE_DIR`（compose 里挂到 `/state`）。
+#
+# ★ 为什么**必须**给回退值：本机（Windows）跑测试、或旧镜像没设环境变量时，
+#   行为要与改动前**逐字相同**（`tests/test_drive_loop_service.py` 等钉着这些路径）。
+STATE_DIR = Path(os.environ.get("DRIVE_STATE_DIR") or HERE).resolve()
+
+
 from orchestrator import state as S  # noqa: E402
 
-# 通知（可选）。只往 NAS 本机的 spool 写纯文本事件文件，零凭据；
-# 发信由 NAS 上的 notify-spool.sh 读 DSM 自己的 SMTP 配置完成（见 notify.py）。
-# ★ 电脑端退役前是"Windows 写进 NAS 的 spool"，现在跑批和 spool 同在 NAS 上。
-# ★ 用 try 包住：notify.py 缺失/损坏也不该让跑批起不来 —— 通知是附属功能。
+# 通知（**已剥离** 2026-10-04）。原先这里 `import notify`，把纯文本事件写进
+# NAS 本机的 spool，再由 NAS 侧 `notify-spool.sh` 读 DSM 自己的 SMTP 发信。
+# ⇒ 该模块整体迁去独立项目（邮件通知告警；见本仓 `重构方案.md` §11）。
+# ★ 保留这次 `import` 尝试 + `try` 兜底：**万一** NAS 上仍留着一份 `notify.py`
+#   （同目录、可导入），通知就照旧工作；缺了也不影响跑批 —— 通知永远是附属功能。
+# ★★ 不要"顺手删干净"：`emit()` 的调用点在十几处、且分散在自检里，删调用=改一大片
+#   风险面；而**挂掉开关**（此处的降级 + `--no-notify`）已经足以让它静默。
 try:
     import notify as _notify  # noqa: E402
 except Exception:  # noqa: BLE001
@@ -206,7 +226,7 @@ def packs_from_arg(spec: str | None) -> list[str]:
 # --------------------------------------------------------------------------- #
 # cross-seed 的 compose 目录
 # --------------------------------------------------------------------------- #
-# 在 NAS 本机（DSM 计划任务跑）： /volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+# 在 NAS 本机（DSM 计划任务跑）： <compose> —— 现为 /volume2/docker_ssd/reseed（见下方常量）
 #
 # ★★ 2026-09-12：**电脑端已退役**，UNC 兜底已注释掉（保留可查，别删注释）。
 #   留着的理由不是"以后可能还用" —— 是这段注释本身记着一个坑：2026-09-11 之前，
@@ -215,10 +235,11 @@ def packs_from_arg(spec: str | None) -> list[str]:
 #   就多一个「哪天 NAS 路径写错，它会**悄悄**绕回 SMB 连自己」的静默降级点 ——
 #   那种情况不会报错，只是变慢，属于最难查的一类。
 #   要回退：取消下面那行的注释即可（代码本身没错，是场景没了）。
+# in-place: cross-seed 目录改为可注入（见上方 STATE_DIR 段）。默认回退到**新根**。
 CROSSSEED_DIRS = (
-    "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink",
+    os.environ.get("COMPOSE_DIR") or "/volume2/docker_ssd/reseed",
     # [电脑端已退役 2026-09-12] 原本是 Windows 经 SMB 跑时的兜底路径：
-    # "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink",
+    # "//iSunker-DS423/docker_ssd/reseed",
 )
 
 
@@ -238,8 +259,14 @@ def first_existing(rel: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
-# 通知出口（可选）
+# 通知出口（**已剥离** 2026-10-04 —— 见文件头 import 处与本仓 `重构方案.md` §11）
 # --------------------------------------------------------------------------- #
+# 这一段的函数**全部保留**（`emit` / `reset_notify_count` / `notify_delivered` /
+# `describe_notifier` / `init_notifier`），因为 `emit()` 的调用点散在十几处自检里。
+# ★ 剥离的方式是「**挂掉开关**」而不是「删调用」：`notify.py` 一缺（镜像里已不 COPY、
+#   NAS 目录也会被清理），`_notify = None` ⇒ `_NOTIFIER` 永远 None ⇒ 所有出口 no-op。
+#   ⇒ 行为等价于停用，而**改动面只在导入处**（一处），不动那十几处调用点。
+#
 # 事件分两档，由 notify.Event.level 决定 NAS 侧怎么处理：
 #
 #   alert       → **立刻发信**（自检报警 / 连续失败 / 整批异常）
@@ -321,7 +348,7 @@ def notify_delivered() -> int:
 def describe_notifier() -> str:
     """给启动日志用的一句话，让人一眼看出通知到底通没通。"""
     if _notify is None:
-        return "✗ 未启用（找不到 notify.py）"
+        return "✗ 未启用（通知模块已剥离，找不到 notify.py）"
     if _NOTIFIER is None:
         return "✗ 未启用"
     if not _NOTIFIER.enabled:
@@ -755,7 +782,7 @@ def check_env_applied(args) -> None:
     LOG.warning("    410 = 该索引器在 Prowlarr 里已经没了，容器里的 TORZNAB_URLS 还留着它；")
     LOG.warning("    401 = apikey 对不上；403 = 该站被禁用。三者多半是同一件事。")
     LOG.warning("    ⚠ `docker compose restart` **不重新注入环境变量**，必须：")
-    LOG.warning("      cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink \\")
+    LOG.warning("      cd %s \\", CROSSSEED_DIRS[0])
     LOG.warning("        && sudo docker compose up -d --no-deps --force-recreate cross-seed")
     LOG.warning("    验证：本条警告消失（上面的「索引器自检」也会跟着变绿）。")
     LOG.warning("!" * 62)
@@ -774,7 +801,7 @@ def check_env_applied(args) -> None:
                    "  410 = 该索引器在 Prowlarr 里已经没了，容器里的 TORZNAB_URLS 还留着它；\n"
                    "  401 = apikey 对不上；403 = 该站被禁用。三者多半是同一件事。\n\n"
                    "  ⚠ `docker compose restart` **不重新注入环境变量**，必须：\n\n"
-                   "  cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink \\\n"
+                   f"  cd {CROSSSEED_DIRS[0]} \\\n"
                    "    && sudo docker compose up -d --no-deps --force-recreate cross-seed\n\n"
                    "  修好后本条自动消失（同 key 12 小时内不重复发）。\n"),
              key=f"env-stale:{url}/{code}",
@@ -842,7 +869,7 @@ def prowlarr_cfg(args) -> tuple[str, str]:
 #   那是"有别的工具在用同一个 Prowlarr"的唯一信号（§16.6）。
 #   ★ 拿不到时**只写一句原因**，绝不编数（见 `attach_prowlarr_quota` 的保证）。
 # --------------------------------------------------------------------------- #
-DAILY_FILE = HERE / ".daily-report.state"
+DAILY_FILE = STATE_DIR / ".daily-report.state"
 
 
 def _daily_last() -> str:
@@ -1158,7 +1185,7 @@ def qb_stalled_watch(args) -> tuple[str, dict]:
 # ★ 只报**数量与来源**，绝不报种子名 / tracker / content_path（同 `qb_999_watch`
 #   的口径：日报是要发出去的）。要知道具体是哪几条，跑**只读**的
 #   `scripts/diag/reseed-freeze-report.py`（人主动跑，且也要显式 `--show-hashes`）。
-RESEED_FREEZE_FILE = HERE / ".reseed-freeze.state"
+RESEED_FREEZE_FILE = STATE_DIR / ".reseed-freeze.state"
 RESEED_FREEZE_KEY = "_reseed_freeze"
 RESEED_FREEZE_SRC_OURS = "cross-seed"
 RESEED_FREEZE_SRC_IYUU = IYUU_TAG
@@ -1393,7 +1420,7 @@ def reseed_freeze_watch(args) -> tuple[str, dict]:
 # ★ 只报**数量**，不报路径 / 不报种子名（同 `qb_999_watch` 的口径）：
 #   日报是要发出去的。要知道具体是哪些，跑 `scripts/diag/crossseed-linkguard.py`
 #   —— 那是人主动跑，且默认也只出 hash。
-LINKGUARD_FILE = HERE / ".linkguard.state"
+LINKGUARD_FILE = STATE_DIR / ".linkguard.state"
 LINKGUARD_TAG = "cross-seed"
 LINKGUARD_SNAP_KEY = "_linkguard_snapshot"
 LINKGUARD_DETAIL_KEY = "_linkguard_detail"
@@ -1558,7 +1585,7 @@ def _redact(s: str) -> str:
 #: ★ 为什么不并进 `.daily-report.state`：那个文件是 `_daily_set()` **整文件覆盖写**
 #:   （`tmp.write_text(json.dumps({"last_day": day}))`）—— 并进去会被静默抹掉，
 #:   而且是那种"这次抹了、下次才发现"的抹法。宁可多一个文件。
-RECONCILE_FILE = HERE / ".reconcile.state"
+RECONCILE_FILE = STATE_DIR / ".reconcile.state"
 
 #: `.reconcile.state` 里存「声明点基线」的保留键。
 #: ★ 它**不是一格读数** —— 读数是「本次读到了什么」，基线是「**现状**（已接受的差集）」。
@@ -2372,7 +2399,7 @@ def report_daily(args, *, force: bool = False, farm_note: str = "") -> bool:
 #   退出码既不是 0 也不是 1，说明"根本没查成"。不这么判的话，"巡检静默地没在跑"
 #   和"真的没漂移"从外面看一模一样 —— 那正是 §16.2 开头说的
 #   「分不清'真的没漂移'和'还是没在检查'」，比不做校验更坏，因为它给的是**虚假的安心**。
-FARM_CHECK_FILE = HERE / ".farm-check.state"
+FARM_CHECK_FILE = STATE_DIR / ".farm-check.state"
 FARM_CHECK_MIN_GAP_SEC = 20 * 3600      # 约一天一次（用时间戳差值，绕开"跨天/时区"边界）
 # 超时按**实测**给余量，不是拍脑袋：2026-09-12 在 NAS 上量到 `--verify` **4 秒**
 # （475 条，本地 stat + 列 49 个目录；全是本机 I/O，没有网络往返）。
@@ -2785,7 +2812,7 @@ def run_round(pack: str, packs: list[str], args, api_key: str) -> S.DriveStats |
 # --------------------------------------------------------------------------- #
 # --once 的跨进程节流 + 包轮换（计划任务每 15 分钟唤醒时靠这个防重叠）
 # --------------------------------------------------------------------------- #
-STATE_FILE = HERE / ".drive-loop.state"
+STATE_FILE = STATE_DIR / ".drive-loop.state"
 
 
 def read_state() -> dict:
@@ -3265,10 +3292,15 @@ def main() -> int:
     ap.add_argument("--cadence-days", type=int, default=S.DEFAULT_CADENCE_DAYS)
     ap.add_argument("--cadence", default=None)
     ap.add_argument("--dry-run", action="store_true", help="只打印计划，不发请求")
-    # --- 通知 ---
+    # --- 通知（**已剥离** 2026-10-04，见文件头 import 处 + `重构方案.md` §11）---
+    # ★ 参数**保留**（不删）：① 与 `_notify.notifier_from_args` 的契约不变，万一
+    #   NAS 上还留着 `notify.py` 就照旧工作；② 删掉参数会破命令行兼容（脚本/文档
+    #   里都还带着 `--no-notify`）；③ 剥离的实际开关是「`import notify` 失败」
+    #   ⇒ 这几个参数现在是**无害的空转**。
     ap.add_argument("--notify-spool", dest="notify_spool", default=None,
-                    help="通知事件文件写到哪（默认 NAS 上的 notify/spool，见 notify.py；"
-                         "也可用环境变量 NOTIFY_SPOOL）")
+                    help="通知事件文件写到哪（默认 NAS 上的 notify/spool；"
+                         "也可用环境变量 NOTIFY_SPOOL）。★ 通知模块已剥离，除非 NAS 上"
+                         "另放了 notify.py，本参数当前不生效")
     ap.add_argument("--no-notify", action="store_true",
                     help="本次不写任何通知事件（也可用环境变量 NOTIFY_DISABLE=1）")
     ap.add_argument("--notify-cooldown-hours", dest="notify_cooldown_hours",
@@ -3283,7 +3315,7 @@ def main() -> int:
             logging.StreamHandler(),
             # ★必须轮转：无人值守会跑几个月，FileHandler 只追加会涨到几百 MB
             RotatingFileHandler(
-                str(HERE / "drive-loop.log"),
+                str(STATE_DIR / "drive-loop.log"),
                 maxBytes=5_000_000, backupCount=5, encoding="utf-8",
             ),
         ],
@@ -3332,6 +3364,8 @@ def main() -> int:
 
     # 通知：必须在 check_indexers / check_env_applied **之前**建好 ——
     # 那两个自检本身就会发告警（这恰恰是最需要有人看到的两个）。
+    # ★ 通知模块已剥离 ⇒ 这里多半是空转（`_notify is None`），日志会打
+    #   "✗ 未启用（通知模块已剥离…）"。保留调用是为了万一 NAS 上仍有 notify.py。
     init_notifier(args)
     LOG.info("通知: %s", describe_notifier())
 
@@ -3345,6 +3379,8 @@ def main() -> int:
             LOG.warning("  ⚠ 通知目录的上级不存在：%s", _NOTIFIER.spool.parent)
             LOG.warning("    NAS 没挂上？事件会写失败（不影响跑批），先跑一次 "
                         "notify-spool.sh 或在 NAS 上建好该目录。")
+            LOG.warning("    （★ 通知模块已剥离；除非 NAS 上另放了 notify.py，"
+                        "本条只是兜底提示。）")
 
     # 自检：cross-seed 真实搜索范围 vs --indexers（不一致会静默错记，务必先喊出来）
     check_indexers(args)

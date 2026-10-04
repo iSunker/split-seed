@@ -2,12 +2,15 @@
 #
 # ★★ 与 `orchestrator/Dockerfile` 的关键差别：**没有 pip install**。
 #   理由（2026-09-17 本机实测，不是推断）：
-#     `scripts/drive-loop.py` 的 import 闭包 = `orchestrator.state` + `notify`，
-#     而这三处的顶层 import **全是标准库**
+#     `scripts/drive-loop.py` 的 import 闭包 = `orchestrator.state`（+ 可选 `notify`），
+#     而这几处的顶层 import **全是标准库**
 #     （`orchestrator/__init__.py` 只有 docstring、`state.py` 纯 stdlib）。
 #     `yaml` 只在 `orchestrator/config.py`，drive-loop **不走那条路径**。
 #   ⇒ 立 `python:3.12-slim` 跑得起来（实证：在没装任何 pip 包的镜像里
-#     `from orchestrator import state` 与 `import notify` 均 OK）。
+#     `from orchestrator import state` 均 OK）。
+#   ★ 2026-10-04：`notify` 模块已**整体剥离**到独立项目（NAS 侧发信脚本仍留 NAS），
+#     ⇒ 本镜像**不再 COPY notify.py`，`drive-loop.py` 的 `import notify` 走 try 兜底
+#     （`_notify = None`），通知出口静默降级为 no-op。见 `重构方案.md` §11。
 #   ★ 若哪天 drive-loop 开始用第三方库，**必须在这里补 pip**，
 #     而判据是「import 闭包里非标准库的有没有」——`D:\tmp\check_imports.py` 就是查这个的。
 #
@@ -60,7 +63,8 @@ WORKDIR /app
 #     NAS 上**不许** build（那边上下文是 compose 目录，相对路径必失败）—— 只 load。
 COPY orchestrator/ /app/orchestrator/
 COPY scripts/drive-loop.py   /app/scripts/drive-loop.py
-COPY scripts/notify.py       /app/scripts/notify.py
+# ★ 2026-10-04：`notify.py` **不再 COPY** —— 通知模块已整体剥离（见文件头与本仓
+#   `重构方案.md` §11）。drive-loop.py 的 `import notify` 用 try 兜住 ⇒ 缺它不报错。
 COPY scripts/reseed-state.py /app/scripts/reseed-state.py
 # ★ `_run_verify()` 会起子进程跑它 ⇒ **必须在镜像里**（2026-09-17 读代码发现，`#58` 记过）
 COPY scripts/build-farm.sh   /app/scripts/build-farm.sh

@@ -138,6 +138,9 @@ services:
       - RESEED_CONFIG=/config/config.yml
       # `state` 子命令只读的那个 sidecar 状态库（真实位置不在 /config 下，见下）
       - RESEED_STATE_DB=/state/state.db
+      # ★★ 2026-10-04：qB 只读 API Key（同 drive-loop 处那条注释）。编排器
+      #   `state` 子命令读 qB 时也走 `state._qbit_*` ⇒ 一并带上。
+      - QB_API_KEY=${QB_API_KEY:-}
     volumes:
       # 编排器(autohardlink)的配置目录 = ./hlink；把 config.yml 放进 hlink/ 即可。
       # 注意：这里只放"配置/日志"等元数据，真正的硬链接数据在 LINK_DIR(/volume1/video 下)。
@@ -207,7 +210,9 @@ services:
   # -----------------------------
   #   挂整个 compose 目录 = 把 `.env`、`prowlarr/`（cookie + db）、
   #   `cross-seed/`（含 API key）、`notify/notify.conf`（邮箱口令）一并交给这个容器。
-  #   **躲不掉**（要 1:1 就必然如此）。`profiles` 锁把"什么时候交出去"变成人的决策，
+  #   ★★ 2026-10-04 更新：通知模块已整体剥离（`重构方案.md` §11）⇒ 本条里
+  #     `notify/notify.conf` 这份"邮箱口令"**随之迁出**（NAS 侧发信脚本仍读 DSM
+  #     自己的 SMTP 配置）。挂载仍是整目录 1:1 未改（那是 push/pull 重构的事）。
   #   但**不能**减小半径。
   #
   # ★ 用户与属主：**不加 `user:`**（与另外三个服务不同，这是刻意的）
@@ -306,6 +311,12 @@ services:
       #        `tests/test_drive_loop_service.py` ①k 那条**逐条**挂载断言。
       - DRIVE_PACKS=${DRIVE_PACKS:-frds-top250-2024}
       - DRIVE_LIMIT=${DRIVE_LIMIT:-500}
+      # ★★ 2026-10-04：qB 的 API Key —— 只读访问 :3060 用（`Authorization: Bearer`）。
+      #   本服务读 qB（回灌 / 卡999 / 卡种 / IYUU / 链接守护）走 `state._qbit_*`，
+      #   那些函数现在会带上这个头（见 `orchestrator/state.py::_qb_auth_header`）。
+      #   ★ `env_file: [.env]` 其实已经带进来了，这里显式写一条是**为了能被搜到/读见**。
+      #   ★ 空值也 OK：没有 key 时行为与改动前逐字相同（白名单模式不受影响）。
+      - QB_API_KEY=${QB_API_KEY:-}
     volumes:
       # ① compose 目录，**同名同路径**（见上面「挂载为什么是整目录 1:1」）
       #    ★ 用绝对路径字面量，**不用 `./`** —— `./` 解析到容器内不存在的宿主路径，
@@ -483,6 +494,11 @@ services:
       # 而 drive-loop 一轮是分钟级 ⇒ 10 分钟足够覆盖「停了没人管」这个窗口。
       - WATCH_INTERVAL=600
       - WATCH_COMPOSE_DIR=/volume2/docker_ssd/prowlarr_cross-seed_autohardlink
+      # ★★ 2026-10-04：通知模块已整体剥离（见 `重构方案.md` §11）。`NOTIFY=0` ⇒
+      #   巡检**照样拉起容器**，但**不往 spool 投告警**。默认 `1`（保留投递能力）。
+      #   ★ 等项目 B（邮件通知告警）接管告警编排后，把这里改成 `NOTIFY=0`；
+      #     现在先留 1，让 NAS 上仍留着的 `notify-spool.sh` 继续发巡检告警。
+      - NOTIFY=${NOTIFY:-1}
       # ★★ 2026-10-01：项目 B（qbittorrent-reseed）的 compose 目录 —— 看护器现在也盯
       #   `qbittorrent-reseed`（它原不在本栈，停摆 3h47m 没人拉起）。两条 `up -d` 要在
       #   **各自的目录**里跑（项目 A 有 profile、项目 B 没有），故两个目录都要挂进去。

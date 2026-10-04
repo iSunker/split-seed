@@ -5,19 +5,26 @@
 # 为什么必须有这一条（2026-09-17 本机实测的形态）
 # ----------------------------------------------
 # `drive-loop.py` 里有**写死的绝对路径**（`CROSSSEED_DIRS[0]` =
-# /volume2/docker_ssd/prowlarr_cross-seed_autohardlink），而 `state.db` 里
+# compose 根，现为 /volume2/docker_ssd/reseed，可用 `COMPOSE_DIR` 覆盖），而 `state.db` 里
 # 存的也全是 `/volume1/...` 绝对路径。
 # ⇒ 挂载**少挂一条**、或**挂到别的路径**时，它**不报错**：只打一行
 #   ⚠ 找不到 cross-seed 的 info 日志（试过 …）—— 回灌将推不出「是否在做种」，
 #     原本 SEEDING 的片子会被 **误降级成 MATCHED**。
 #   ★★ 后果是**静默改错状态**，不是崩溃 ⇒ 必须有一条**会红**的检查挡在前面。
 #
+# ★★ 2026-10-05 模型变更（§8.3：代码全在镜像里）后，挂载清单变了：
+#   · compose 根 **只读挂进来**（`<新根>:<新根>:ro`）—— 给 `CROSSSEED_DIRS`
+#     读 cross-seed.db / info.current.log / build-farm.sh / .env 用；
+#   · 运行态目录单独挂（`./state:/state`）—— 6 个 `.state` + attempts.log + state.db 都在这儿；
+#   · `drive-loop/run.sh`（宿主 `--once` 那份）**不再进容器挂载**，本脚本不再查它。
+#   ⇒ 判据随之收窄：查 compose 根能读、查**挂载进来**的 state.db 能读。
+
 # 本脚本就查三件事（全部只读）：
 #   ① 硬编码的 compose 目录在容器内**能 stat 到**，且里面那三样关键文件在；
-#   ② `state.db` 里 `pack` 表的绝对路径（`root`/`farm_root`）在容器内**能 stat 到**；
+#   ② **挂载进来**的 `state.db` 里 `pack` 表的绝对路径（`root`/`farm_root`）在容器内**能 stat 到**；
 #   ③ 媒体卷的挂载点与 `.env` 里的路径前缀**一致**（§9：硬链接不能跨卷）。
 #
-# 用法（在容器里跑；把 COMPOSE_DIR / VOL1 按挂载点传）
+# 用法（在容器里跑；把 COMPOSE_DIR / VOL1 / DB 按挂载点传）
 #   sh mount-selfcheck.sh
 # 退出码：0 = 全过；1 = 有 ✗（**别往下跑**）；2 = 查不了（缺工具/缺文件）
 # =====================================================================
@@ -36,9 +43,10 @@ set -eu
 #     字节输出，不过 python 的编码器 —— 所以只有 **python heredoc** 会中招，别一并改。
 export PYTHONIOENCODING=utf-8
 
-COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink}"
+COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
 VOL1="${VOL1:-/volume1/video}"
-DB="${DB:-$COMPOSE_DIR/drive-loop/hlink/state.db}"
+# ★ state.db 现挂在**运行态卷**下（`./data/drive-loop/state:/state`），不再在 compose 根里。
+DB="${DB:-/state/hlink/state.db}"
 
 RC=0
 say() { printf '  %s\n' "$*"; }
@@ -56,17 +64,10 @@ else
   bad "目录不在：$COMPOSE_DIR  ⇒ ★ 挂载清单漏了/挂错路径了（这是**静默**的，不会报错）"
 fi
 for rel in "cross-seed/cross-seed.db" "cross-seed/logs/info.current.log" \
-           "drive-loop/run.sh" "build-farm.sh"; do
-  case "$rel" in
-    build-farm.sh) p="$COMPOSE_DIR/$rel" ;;
-    *)             p="$COMPOSE_DIR/$rel" ;;
-  esac
+           "build-farm.sh"; do
+  p="$COMPOSE_DIR/$rel"
   if [ -e "$p" ]; then ok "$rel"; else bad "$rel 不在（回灌/巡检会静默退化）"; fi
 done
-# ★ build-farm.sh 的真实位置有两处可能（compose 根 / drive-loop/scripts），都认
-if [ ! -e "$COMPOSE_DIR/build-farm.sh" ] && [ -e "$COMPOSE_DIR/drive-loop/scripts/build-farm.sh" ]; then
-  ok "build-farm.sh 在 drive-loop/scripts/（另一处合法位置）"
-fi
 echo
 
 # ---------- ② state.db 里的绝对路径 ----------

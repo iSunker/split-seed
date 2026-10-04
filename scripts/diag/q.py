@@ -2,7 +2,7 @@
 """用**挂载那份** state.py 算 frds 的待搜池。只读。
 
 ★ 用法（在 NAS 上，一条短命令）：
-    docker exec reseed-drive-loop python /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/q.py
+    docker exec reseed-drive-loop python /volume2/docker_ssd/reseed/q.py
 
 ★ 可变的部分走环境变量，**不用改文件**：
     -e PK=dc-collection       换包
@@ -21,9 +21,9 @@ import hashlib
 import os
 import sys
 
-ORCH = ("/volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+ORCH = ("/volume2/docker_ssd/reseed"
         "/drive-loop/orchestrator")
-DB = ("/volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+DB = ("/volume2/docker_ssd/reseed"
       "/drive-loop/hlink/state.db")
 
 # ★★ 把 /app 与 '' 从 sys.path 剔掉 —— 否则 import state 会解析到镜像里那份。

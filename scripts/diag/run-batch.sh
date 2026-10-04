@@ -42,7 +42,7 @@ PW_URL="http://$NAS_HOST:9696"
 PKG_REL="download/movies/DouBan_IMDB.TOP250.Movies.Mixed.Collection.20240501.FRDS"
 SMB_PKG="//$NAS_NAME/video/$PKG_REL"
 NAS_PKG="/volume1/video/$PKG_REL"
-PROD_ENV="//$NAS_NAME/docker_ssd/prowlarr_cross-seed_autohardlink/.env"
+PROD_ENV="//$NAS_NAME/docker_ssd/reseed/.env"
 
 CATEGORY="reseed-singles"
 COUNT="${COUNT:-10}"

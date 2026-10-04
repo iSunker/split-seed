@@ -98,10 +98,10 @@ for _s in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-NAS_ENV = "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/.env"
+NAS_ENV = "//iSunker-DS423/docker_ssd/reseed/.env"
 NAS_IP = "192.168.0.7"
 #: ★ cross-seed 的库（UNC）。**只读**、`mode=ro`、且**绝不取 `url`/`apikey` 两列**。
-NAS_CROSSSEED_DB = ("//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+NAS_CROSSSEED_DB = ("//iSunker-DS423/docker_ssd/reseed"
                     "/cross-seed/cross-seed.db")
 #: 墙钟（`retry_after`）与本地时钟差多少秒算「同一个窗口」——见 `disarm_at`。
 CLOCK_SKEW_SEC = 120

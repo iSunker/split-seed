@@ -24,15 +24,26 @@
 #    无告警，比"崩溃循环"更难发现（崩溃至少会重启、会被 `ERR-DOCKER-12` 的
 #    `RestartCount` 抓到）。⇒ **硬超时**：等满 MAX_WAIT 秒，**不管 qb 好没好，
 #    一律照常 `exec cross-seed daemon`**，把上游自己的重试当兜底。
-# ② **就绪判断只看 HTTP 通不通**（`version` 端点返回 2xx）—— 不猜别的语义。
-#    这里**不做**登录（不碰 qB 写操作、不需要凭据），只问"端口后面有没有人"。
+# ② 就绪判断**不能只看端口通不通** —— 必须**真的登录一次**。
+#    ★★ 2026-10-04 修正（这正是 403 循环的根因被漏在这里的地方）：
+#       旧版只 GET `/api/v2/app/version` 看 2xx。但 qB **未授权也返回 200**（它
+#       把 API 请求当浏览器、回一页 HTML/JSON 而**不是** 403）⇒ 闸门**放行** ⇒
+#       cross-seed daemon 接着去**真登录** ⇒ 白名单为空 ⇒ `Your configuration is
+#       invalid` ⇒ exit 0 ⇒ `restart` 拉起 ⇒ **又是无限重启循环**。
+#       ⇒ 闸门必须与 daemon 做**同一件事**：POST `/api/v2/auth/login`，
+#         且必须拿到 `Ok.`（qB 登录成功的字面量），否则**继续等**。
+#   参见：docker-compose.yml 里那段 ERR-DOCKER-13 注释 / 重构方案 §12.3（A2）。
 #
 # ★ 本脚本跑在 **cross-seed 容器内部**，用**服务名** `qbittorrent-reseed` 直连
 #   （`:3060`）；**不要**改成 `${NAS_IP}` —— 群晖上「容器→宿主 LAN IP→DNAT 回
 #   另一容器」的回环会 timeout（见 docker-compose.yml 顶部 2026-09-11 实测）。
 #
-# ★ 依赖容器里已有的 `wget`（cross-seed 基础镜像自带；2026-10-01 实测确认）。
-#   用一个**短** `--timeout=5` —— 点不通要**快**返回，好进下一轮，别把一轮卡死。
+# ★ 依赖容器里已有的 **`curl`**（cross-seed 基础镜像自带；2026-10-04 实测确认：
+#   `/usr/bin/curl` 在；同时 `/usr/bin/wget` 是 **BusyBox** 版，`--version` 都不认，
+#   且 `--post-data` 行为不标准）。★ 改用 `curl` + **只看 HTTP 状态码**，别解析正文：
+#   实测 qB v5.2.4 登录成功回 **`204 No Content` 且正文为空**（不是老版的 `200 Ok.`），
+#   而失败回 `401` / 未授权接口回 `403`。⇒ 判据 = 状态码 ∈ {200,204}，其余一律继续等。
+#   一个**短** `--max-time=5` —— 点不通要**快**返回，好进下一轮，别把一轮卡死。
 #
 # ★ 为什么用 `sh` 而不是 bash：基础镜像的 `/bin/sh` 足够，且 compose 里就是
 #   `command: ["sh", "/config/wait-for-qb.sh"]`。别引入 bash 依赖。
@@ -48,6 +59,22 @@ MAX_WAIT="${WAIT_MAX_WAIT:-300}"
 # 两轮之间的间隔（秒）。
 INTERVAL="${WAIT_INTERVAL:-5}"
 
+# ★★ 登录凭据（约束 ② 要真登录）：从 .env 的 QBIT_URL_CRED 里解出来。
+#   形如 http://user:pass@host:port —— 用参数展开剥掉协议头，再按 `@` 取前段，
+#   最后按 `:` 取 user / pass。任一缺失 ⇒ 退回旧行为（只探端口），并**明确告警**，
+#   免得"以为在验凭据、其实没验"（静默降级比不验更坏）。
+CRED="${QBIT_URL_CRED:-}"
+# 去掉 `scheme://`
+CRED_NOPROTO="${CRED#*://}"
+# `@` 之前 = user:pass；没有 `@` 说明没带凭据。
+AUTH="${CRED_NOPROTO%%@*}"
+if [ "$AUTH" = "$CRED_NOPROTO" ]; then
+    QB_USER=""; QB_PASS=""
+else
+    QB_USER="${AUTH%%:*}"
+    QB_PASS="${AUTH#*:}"
+fi
+
 now() { date +%s; }
 
 # ★ `$(now)` 不写 `$(now())` —— 空括号会让某些 `sh`（dash）在解析 `$(` 时把它
@@ -56,14 +83,45 @@ START=$(now)
 # 已等秒数（用整数算术，POSIX sh 的 `$(( ))` 就够）。
 waited=0
 
-echo "[wait-for-qb] 等 $QB_URL/api/v2/app/version 就绪（最多 ${MAX_WAIT}s，每 ${INTERVAL}s 探一次）…"
+if [ -n "$QB_USER" ]; then
+    echo "[wait-for-qb] 等 $QB_URL 就绪**且能登录**（用户 $QB_USER，最多 ${MAX_WAIT}s，每 ${INTERVAL}s 探一次）…"
+else
+    echo "[wait-for-qb] ⚠ 未从 QBIT_URL_CRED 解出凭据 ⇒ 只探端口（不验授权）。" \
+         "若 qB 白名单为空，daemon 仍会登录失败并循环 —— 请设 QBIT_URL_CRED。"
+fi
 
 while :; do
-    # `-q` 静默、`-O-` 输出到 stdout（丢弃即可，只关心退出码）、`-T` 短超时。
-    # ★ 把输出丢进 /dev/null：我们**只要"通不通"**，不要内容（约束 ②）。
-    if wget -q -O /dev/null -T "$PROBE_TIMEOUT" "$QB_URL/api/v2/app/version" 2>/dev/null; then
-        echo "[wait-for-qb] qB 已就绪（等了 ${waited}s）。启动 cross-seed daemon。"
-        break
+    # "通了且能登录"才放行；否则一律继续等（约束 ②）。
+    if [ -n "$QB_USER" ]; then
+        # ★ POST 真登录，**只取状态码**（`-o /dev/null -w '%{http_code}'`）。
+        #   200/204 = 成功放行；401（密码错/白名单外）/403（未授权）＝ 继续等。
+        _code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$PROBE_TIMEOUT" \
+                    --data-urlencode "username=$QB_USER" \
+                    --data-urlencode "password=$QB_PASS" \
+                    "$QB_URL/api/v2/auth/login" 2>/dev/null)
+        case "$_code" in
+            200|204)
+                echo "[wait-for-qb] qB 已就绪**且登录成功**（HTTP $_code，等了 ${waited}s）。启动 cross-seed daemon。"
+                break
+                ;;
+            "")
+                : ;;   # 连不上（端口还没起）—— 静默继续等，别刷屏
+            *)
+                echo "[wait-for-qb] 登录未通过（HTTP $_code）——继续等。"
+                ;;
+        esac
+    else
+        # 无凭据：退回旧行为，只探端口（2xx 即通）。**明确标注这是弱判据**。
+        # ★ 注意：qB 未授权时 `/app/version` 回 **403**（不是 200）——本判据确实很弱，
+        #   仅当白名单已配好（无需登录）时才够用。
+        _code=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$PROBE_TIMEOUT" \
+                    "$QB_URL/api/v2/app/version" 2>/dev/null)
+        case "$_code" in
+            200|204)
+                echo "[wait-for-qb] qB 端口已通（HTTP $_code，等了 ${waited}s，未验授权）。启动 cross-seed daemon。"
+                break
+                ;;
+        esac
     fi
 
     if [ "$waited" -ge "$MAX_WAIT" ]; then

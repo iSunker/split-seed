@@ -22,7 +22,7 @@
   理由见 `q.py` 顶部：上一版探针读到过 `/app` 里 Sep 18 的旧 state.py。
 
 ★ 用法（NAS，一条短命令）：
-    docker exec reseed-drive-loop python /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/q2.py
+    docker exec reseed-drive-loop python /volume2/docker_ssd/reseed/q2.py
   ★ 它会**打开可写库**（因为要复刻 `__init__`）—— `__init__` 里有 `commit()`，
     但不改任何业务数据（`SCHEMA`/`_migrate` 都是幂等的建表/补列）。
     ⇒ 若你不想让它碰库：`-e Q_SKIP_INIT=1`（那就退回 `q.py` 的绕法，但**层数会失真**）。
@@ -42,14 +42,14 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-ORCH = ("/volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+ORCH = ("/volume2/docker_ssd/reseed"
         "/drive-loop/orchestrator")
-DB = ("/volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+DB = ("/volume2/docker_ssd/reseed"
       "/drive-loop/hlink/state.db")
 
 # ★★ 与 drive-loop.py 同一条路径规则：它 sys.path[0]=<drive-loop>，
 #    然后 `from orchestrator import state`。这里把两者都放进去，保证解析结果一致。
-DRIVE = ("/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop")
+DRIVE = ("/volume2/docker_ssd/reseed/drive-loop")
 sys.path = [p for p in sys.path if p not in ("/app", "")]
 
 #: ★★ 本机可验性：容器路径 + **本文件上溯的仓库根**。

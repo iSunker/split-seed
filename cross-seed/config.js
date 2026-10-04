@@ -106,8 +106,27 @@ module.exports = {
 
   // --- 命中后的动作：注入 qBittorrent ---
   action: "inject",
-  // 免密白名单模式：直接给 URL；密码模式：改成 http://user:pass@NAS_IP:3060
-  qbittorrentUrl: process.env.QBIT_URL || "http://qbittorrent-reseed:3060",
+
+  // ★★★ v6.13.7 真正的 qB 连接键 = `torrentClients`（带类型前缀的 URL 数组）★★★
+  //   2026-10-04（A2）实测：本镜像 v6.13.7 **完全不认 v5 的 `qbittorrentUrl`**——
+  //   报 `You need to specify torrentClients when using 'inject'` /
+  //   `You need to have a client configured for useClientTorrents`。
+  //   格式（`cross-seed gen-config` 原文）：
+  //     torrentClients: ["qbittorrent:http://username:password@localhost:8080"]
+  //   可选只读标记：`"qbittorrent:readonly:http://user:pass@host:port"`（只当来源、不注入）。
+  //   ★ 为什么内嵌账号密码而不是白名单/APIKey：
+  //     · cross-seed **只发 login 表单、不支持 `Authorization: Bearer`** ⇒ APIKey 对它无效；
+  //     · qB 升到 v5.2.4 后 `AuthSubnetWhitelist` 为空 ⇒ 从 Docker 网 172.x 进来吃 **403**。
+  //     ⇒ 不改 qB conf 的唯一出路：URL 内嵌凭据，让它自己登录（实测登录成功回 **HTTP 204**）。
+  //   ★ 凭据只来自 .env（gitignore），**绝不进仓库**（仓库要公开）。
+  //   ★ 用**服务名** `qbittorrent-reseed` 直连；**别**换成 ${NAS_IP}——
+  //     群晖上「容器→宿主机 LAN IP→DNAT 回另一容器」的回环会 timeout（2026-09-11 实测）。
+  //   ★ 取值优先级：QBIT_URL_CRED（带凭据） > QBIT_URL（无凭据，回退白名单模式）。
+  torrentClients: [
+    "qbittorrent:" +
+      (process.env.QBIT_URL_CRED || process.env.QBIT_URL || "http://qbittorrent-reseed:3060"),
+  ],
+
   // 注入到统一分类，便于隔离/汇报/清理（cross-seed 会自动创建该分类）
   linkCategory: process.env.QBIT_CATEGORY || "reseed-singles",
   duplicateCategories: false,

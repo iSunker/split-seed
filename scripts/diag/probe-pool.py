@@ -38,7 +38,7 @@ except Exception:  # noqa: BLE001
 
 DB = os.environ.get(
     "PROBE_DB",
-    "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/hlink/state.db")
+    "/volume2/docker_ssd/reseed/drive-loop/hlink/state.db")
 #: ★★ 路径候选**两套都给** —— 容器里一套、仓库里一套。
 #:   只写容器那套的后果是：**这个探针在写它的机器上跑不起来** ⇒ 只能"裸奔上线"，
 #:   而本仓的纪律是**先在本机验一遍再推**（我第一版正是只写了容器那套，
@@ -48,7 +48,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 _CANDS = []
 if os.environ.get("PROBE_ROOT"):
     _CANDS.append(pathlib.Path(os.environ["PROBE_ROOT"]))
-_CANDS.append(pathlib.Path("/volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+_CANDS.append(pathlib.Path("/volume2/docker_ssd/reseed"
                            "/drive-loop"))
 #: 本文件在 <repo>/scripts/diag/ ⇒ 上两级 = 仓库根；orchestrator 也在仓库根下
 _CANDS.append(HERE.parent.parent / "orchestrator")

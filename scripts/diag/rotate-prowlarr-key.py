@@ -38,7 +38,7 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-DEFAULT_ENV = "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/.env"
+DEFAULT_ENV = "//iSunker-DS423/docker_ssd/reseed/.env"
 
 
 def mask(u: str) -> str:

@@ -30,7 +30,7 @@
 #
 #   DSM → 控制面板 → 任务计划 → 新增 → **用户定义的脚本**，用户选 `root`，
 #   计划「每 15 分钟」，脚本框一句：
-#     sh /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/drive-loop-docker.sh
+#     sh /volume2/docker_ssd/reseed/drive-loop/drive-loop-docker.sh
 #   ★★ 切过来之前**必须先把 id=9 那个跑 `run.sh` 的任务停掉** —— 否则两条路会同时
 #      跑：它们**共用同一份** `.drive-loop.state` 与 `attempts.log`。`--once` 的闸门
 #      （pid + 心跳）确实能挡住并发，但 attempts.log 会交错成看不懂的样子，
@@ -52,7 +52,7 @@
 # -----------------------------------------
 #   两条，缺一不可。**都不是"挑几个子目录"**，因为代码里的路径**全是绝对路径**：
 #
-#   ① `$COMPOSE_DIR:$COMPOSE_DIR`   （= /volume2/docker_ssd/prowlarr_cross-seed_autohardlink）
+#   ① `$COMPOSE_DIR:$COMPOSE_DIR`   （= /volume2/docker_ssd/reseed）
 #      必须**同名同路径**。它一次覆盖下面这些，全都写死在代码里：
 #        · `CROSSSEED_DIRS[0]` —— `drive-loop.py` 里的**硬编码绝对路径**，
 #          `first_existing()` 拿它找 `build-farm.sh`、`cross-seed/cross-seed.db`、
@@ -165,7 +165,7 @@
 #                       —— `drive-loop/run.sh` 与 `build-farm.sh` 都在用。
 #                          `python:3.12-slim`（Debian）这些都有，但**是"应该"不是"验过"**。
 #      ⇒ 一条命令同时验完（只读，不起容器，不需要批次空档）：
-#          sudo docker compose -f /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/compose.yaml \
+#          sudo docker compose -f /volume2/docker_ssd/reseed/compose.yaml \
 #               run --rm --entrypoint sh reseed-orchestrator -c \
 #               'command -v python sh find stat sed tr basename dirname head mkdir mv cp rm'
 #        ★ 输出应当**恰好 12 行**；少一行就是少一个命令 —— 而少的那一行，
@@ -173,7 +173,7 @@
 # =====================================================================
 set -eu
 
-COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink}"
+COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
 VOL1="${VOL1:-/volume1/video}"
 IMAGE="${IMAGE:-reseed-orchestrator:0.1.0}"
 #: 参照容器：**照它的网络接**。选它的理由是它本来就同时接在 reseed-net 与 qbit-net 上。

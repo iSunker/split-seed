@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # =====================================================================
-# 本地 → NAS 生产 的白名单同步
+# 本地 → NAS 生产 的白名单同步（**只搬 compose + 配置**；代码走镜像）
 #   本地: 本仓库根目录（默认 = 脚本所在目录，可用 SRC 覆盖）
 #   生产: NAS 上的 compose 目录（必须用 DST 指定）
+#
+# ★★ 2026-10-05（B4，push/pull 改造）：本脚本**只管 compose 与配置**。
+#   容器读的**代码**（`orchestrator/*`、`drive-loop/scripts/*.py`、`run-resident.sh`）
+#   已**全部从 FILES 表移除**，改由 **Docker Hub 镜像** 携带（`isunker/reseed-toolkit-*`，
+#   tag=git 短 sha）⇒ 改代码 = 本机 `docker build` + `docker push` + NAS `docker compose pull`。
+#   理由与规则见 `.claude/rules`（§「代码定位」）与 `重构方案.md §8.3`。
 #
 # 原则：
 #   1. 白名单 —— 只覆盖 FILES 里列出的文件，其余一律不碰。
@@ -14,9 +20,9 @@
 #   4. 默认 dry-run 只打 diff；--apply 才写入。
 #
 # 用法:
-#   DST=//my-nas/docker_ssd/prowlarr_cross-seed_autohardlink bash deploy.sh             预览差异
-#   DST=//my-nas/docker_ssd/prowlarr_cross-seed_autohardlink bash deploy.sh --apply     写入（先自动备份）
-#   DST=//my-nas/docker_ssd/prowlarr_cross-seed_autohardlink bash deploy.sh --rollback  回滚到最近一次备份
+#   DST=//my-nas/docker_ssd/reseed bash deploy.sh             预览差异
+#   DST=//my-nas/docker_ssd/reseed bash deploy.sh --apply     写入（先自动备份）
+#   DST=//my-nas/docker_ssd/reseed bash deploy.sh --rollback  回滚到最近一次备份
 #
 #   DST 也可写进 scripts/.nasrc（已 gitignore），避免每次输入。
 # =====================================================================
@@ -35,7 +41,7 @@ _DST_FROM_ENV="${DST:-}"
 
 SRC="${SRC:-$SELF_DIR}"
 DST="${_DST_FROM_ENV:-${DST:-}}"
-DST="${DST:?请设置 DST（NAS 上的 compose 目录），例如 DST=//my-nas/docker_ssd/prowlarr_cross-seed_autohardlink}"
+DST="${DST:?请设置 DST（NAS 上的 compose 目录），例如 DST=//my-nas/docker_ssd/reseed}"
 BACKUP_ROOT="$SRC/.deploy-backup"
 
 # <本地相对路径>::<生产相对路径>
@@ -50,59 +56,6 @@ FILES=(
   "cross-seed/wait-for-qb.sh::cross-seed/wait-for-qb.sh"
   "hlink/config.yml::hlink/config.yml"
   ".dockerignore::.dockerignore"
-  "orchestrator/Dockerfile::orchestrator/Dockerfile"
-  "orchestrator/requirements.txt::orchestrator/requirements.txt"
-  "orchestrator/__init__.py::orchestrator/__init__.py"
-  "orchestrator/config.py::orchestrator/config.py"
-  "orchestrator/crossseed_client.py::orchestrator/crossseed_client.py"
-  "orchestrator/hardlink.py::orchestrator/hardlink.py"
-  "orchestrator/http.py::orchestrator/http.py"
-  "orchestrator/main.py::orchestrator/main.py"
-  "orchestrator/matcher.py::orchestrator/matcher.py"
-  "orchestrator/qbit_client.py::orchestrator/qbit_client.py"
-  "orchestrator/safety.py::orchestrator/safety.py"
-  # ★ 2026-09-12 下午补：state.py **必须也进构建上下文**（<compose>/orchestrator/）。
-  #   原先白名单只把它同步到 drive-loop/orchestrator/（第 76 行），漏了上面这个 ——
-  #   而 Dockerfile 是 `COPY orchestrator/ /app/orchestrator/`（拷整个目录），
-  #   于是容器里**没有** orchestrator/state.py。
-  #   平时看不出来（main.py 以前不导入它），但 `state` 子命令一加就是
-  #   **模块级 ImportError** —— 连默认的 `preflight` 都会一起打挂。
-  #   ★ 教训：**"这个文件在哪几个地方需要"要按"谁拷它"分别数**，
-  #     同一份代码在 <compose>/ 下有两个不同用途的副本（构建上下文 / drive-loop 运行时），
-  #     漏一个不会报错，只会在某条路径上炸。
-  "orchestrator/state.py::orchestrator/state.py"
-  # 驱动层：2026-09-11 起 drive-loop 跑在 **NAS 上**（DSM 计划任务每 15 分钟），
-  # 不再从 Windows 经 SMB 执行。Windows 侧有两个独立的坑（详见 SUMMARY §14）：
-  #   ① <StopOnIdleEnd>true —— 一动键鼠就 TerminateProcess 整个批次；
-  #   ② drive-loop-once.cmd 曾是 LF 行尾，cmd.exe 解析错位 → exit=9009。
-  # 这 6 个文件自成一体地放进 <compose>/drive-loop/，因为它们靠
-  # `ROOT = HERE.parent` 定位 hlink/、日志和状态文件 —— 目录结构必须与仓库一致：
-  #     drive-loop/scripts/drive-loop.py     → ROOT = drive-loop/
-  #     drive-loop/scripts/notify.py
-  #     drive-loop/scripts/reseed-state.py
-  #     drive-loop/orchestrator/{__init__,state}.py
-  #     drive-loop/run.sh                    ← DSM 任务计划实际调的就是它
-  # ★ drive-loop/hlink/state.db 是**生产独有**的运行时状态库，和白名单原则第 2 条
-  #   一样**动不到** —— 它是从本地 hlink/state.db 一次性迁移过去的（见 SUMMARY）。
-  "scripts/drive-loop.py::drive-loop/scripts/drive-loop.py"
-  "scripts/notify.py::drive-loop/scripts/notify.py"
-  "scripts/reseed-state.py::drive-loop/scripts/reseed-state.py"
-  "scripts/drive-loop-nas.sh::drive-loop/run.sh"
-  # ★ 2026-09-17（`#58` C 方案）：容器内**常驻**入口。与上面那份是**两条路**，
-  #   不是替代关系 —— `run.sh` 带 `--once`（DSM 每 15 分钟唤醒一次，容器外跑），
-  #   本文件**不带** `--once`（容器内 `while` 循环，`restart: unless-stopped` 兜底）。
-  #   ⇒ 两份都要在，谁也不能顶掉谁（tests/test_drive_loop_service.py ④a 钉 run.sh 仍在、
-  #     ⑥a 钉本文件已在）。★ 它由 compose 里 `drive-loop` 服务的 command 调用，
-  #     而那个服务带 `profiles: ["drive-loop"]` ⇒ **不会**被 `up -d` 默认拉起来。
-  "scripts/drive-loop-resident.sh::drive-loop/run-resident.sh"
-  "orchestrator/state.py::drive-loop/orchestrator/state.py"
-  "orchestrator/__init__.py::drive-loop/orchestrator/__init__.py"
-  # 通知：NAS 侧脚本 + 配置模板（跑在 NAS 宿主机上，不在容器里，但放 compose 目录下）。
-  # ★ 只同步 .example 模板 —— 真正的 notify.conf（含收件人邮箱）是生产独有的，
-  #   和白名单原则第 2 条一样，**动不到**，需要时在 NAS 上从模板拷一份。
-  "scripts/notify-spool.sh::notify/notify-spool.sh"
-  "scripts/notify.conf.example::notify/notify.conf.example"
-  # 农场清单维护脚本。★ 2026-09-12 才进的这份白名单 —— 在那之前它是**手工拷上去的**
   #   （仓库里在 scripts/，生产在 compose 根目录，两边靠人记得同步）。
   #   代价实测过：09-11 那次改完 --verify 的期望集，生产副本是另外手工放的，
   #   中间有一段时间两边内容不一致，而且手工放的没有备份。
@@ -351,14 +304,19 @@ trap - EXIT
 #     有的一次性 CLI 压根没有服务可重启）⇒ 一条**静态文本**冒充**本次的动作**，
 #     与 SUMMARY §28 发现三同形：**两个说法都对，只是量的不是同一样东西**。
 #   ⇒ 改成**按本次实际推到的文件分类**，各报各的生效方式；拿不准就明说"未归类"，别猜。
-_need_build=(); _need_recreate=(); _need_nothing=(); _unknown=()
+# ★★★ 2026-10-05（B4，push/pull 改造）：**代码不再走 deploy.sh** ——
+#   `orchestrator/*` / `scripts/drive-loop*.py|sh` 已**从 FILES 表移除**，改由 Docker Hub
+#   镜像携带（`docker compose pull … && up -d --force-recreate`，见 `.claude/rules`）。
+#   ⇒ 下面 `[A]` 分类的判据随之改为"**走镜像**"（如果哪天有文件又回到"进镜像"这条路），
+#     提示语从旧的 `build` 改成 `pull`。分类逻辑保持**按本次实际推到的文件**（不写死）。
+_need_image=(); _need_recreate=(); _need_nothing=(); _unknown=()
 for p in "${CHANGED[@]}"; do
   d="${p##*::}"
   case "$d" in
-    orchestrator/*)                       _need_build+=("$d") ;;
+    orchestrator/*|drive-loop/*)          _need_image+=("$d") ;;
     cross-seed/*)                         _need_nothing+=("$d") ;;
     *.env|*.env.example|compose.yml|compose.yaml) _need_recreate+=("$d") ;;
-    drive-loop/*|*.sh|hlink/*)            _need_nothing+=("$d") ;;
+    *.sh|hlink/*)                         _need_nothing+=("$d") ;;
     *)                                    _unknown+=("$d") ;;
   esac
 done
@@ -368,10 +326,11 @@ echo "✓ 同步完成。备份: .deploy-backup/$STAMP  （回滚: bash deploy.s
 echo
 echo "下一步 —— ★ 按**本次实际推到的文件**分类，别照抄（每一类生效方式不同）："
 echo
-if (( ${#_need_build[@]} )); then
-  echo "  [A] 进镜像 ⇒ **必须 build**（--force-recreate 不够）："
-  for d in "${_need_build[@]}"; do echo "        $d"; done
-  echo "        sudo docker compose build reseed-orchestrator"
+if (( ${#_need_image[@]} )); then
+  echo "  [A] 代码 ⇒ **走镜像**（本项目代码全在镜像里；改代码 = 重建 + push + pull）："
+  for d in "${_need_image[@]}"; do echo "        $d"; done
+  echo "        本机： docker build … && docker push isunker/reseed-toolkit-<x>:<sha>"
+  echo "        NAS ： sudo docker compose pull <服务> && sudo docker compose up -d --force-recreate <服务>"
   echo
 fi
 if (( ${#_need_recreate[@]} )); then
@@ -393,5 +352,5 @@ if (( ${#_unknown[@]} )); then
   echo
 fi
 echo "  ★ 一般性复核（只读、随时可跑）："
-echo "        cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+echo "        cd /volume2/docker_ssd/reseed"
 echo "        sudo docker compose ps"

@@ -3150,12 +3150,33 @@ def wait_for_log_quiet(log_path: str | Path, *, quiet_sec: float = 90.0,
 # --------------------------------------------------------------------------- #
 # 这几个原本在 scripts/reseed-state.py 里（私有 `_xxx`），drive-loop.py 又各复制了
 # 一份公开版 —— 两份实现"改一个忘一个"就会静默算错数。集中到这里，两边都 import。
+
+
+def _qb_auth_header() -> dict[str, str]:
+    """qB 的鉴权头（**可选**）。返回 `{"Authorization": "Bearer <key>"}` 或 `{}`。
+
+    ★★ 2026-10-04 新增 —— 这是 **403 循环的我们侧根因修复**（不改 qB 的 conf）：
+      qB 升到 v5.2.4 后 `AuthSubnetWhitelist` 为空 ⇒ 从 Docker 网络 `172.x` 来的
+      无鉴权请求一律 **403**。而本文件原先**一个鉴权头都不带**（只发 `Referer`）。
+      ⇒ 改成：**若环境里有 API Key，就带上 `Authorization: Bearer`**（实测 200）。
+
+    ★ 为什么用**环境变量**而不是参数：这几个函数被 drive-loop / reseed-state 两侧调用，
+      签名各不相同；而"用哪把钥匙"是**部署决定**（`.env` 里的 `QB_API_KEY`），
+      经 compose 的 `environment:` 透传 ⇒ 与 `NOTIFY` 同一套形状，不污染每个调用点。
+      ★ 变量名 `QB_API_KEY` **优先**，`QBIT_API_KEY` 作兼容别名（两种写法都认）。
+    ★ 没有 key 时返回 `{}` —— 行为与改动前**逐字相同**（白名单/password 模式不受影响）。
+    """
+    k = (os.environ.get("QB_API_KEY") or os.environ.get("QBIT_API_KEY") or "").strip()
+    return {"Authorization": f"Bearer {k}"} if k else {}
+
+
 def _qbit_torrents_info(url: str, params: dict[str, str], timeout: float) -> list[dict]:
     """`GET /api/v2/torrents/info?<params>` —— `qbit_torrents` / `qbit_tagged` 共用。
 
     ★ 抽出来是**故意的**，理由就是上面那三行：本项目已经栽过一次"两份实现改一个
       忘一个"。与其再抄一份按 tag 取数的，不如让两条路走同一段 URL 拼装和同一段
       错误语义 —— 将来要加超时/重试/鉴权，改一处就够。
+    ★ 2026-10-04：鉴权也在这里加（一处够）—— 见 `_qb_auth_header`。
     """
     import urllib.parse
     import urllib.request
@@ -3166,7 +3187,9 @@ def _qbit_torrents_info(url: str, params: dict[str, str], timeout: float) -> lis
     #   （`test_iyuu_watch.py` 钉着按分类那条的字面量）。
     q = urllib.parse.urlencode(params)
     full = url.rstrip("/") + "/api/v2/torrents/info" + (f"?{q}" if q else "")
-    req = urllib.request.Request(full, headers={"Referer": url.rstrip("/")})
+    headers = {"Referer": url.rstrip("/")}
+    headers.update(_qb_auth_header())   # ★ 有 QB_API_KEY 就带 Bearer；没有则同旧行为
+    req = urllib.request.Request(full, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8")) or []
 

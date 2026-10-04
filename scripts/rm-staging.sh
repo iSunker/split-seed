@@ -31,8 +31,8 @@
 #
 #   DSM → 控制面板 → 任务计划 → 新增 → **用户定义的脚本**，用户选 `root`，
 #   脚本框里就一句（**手动运行**，不要设计划）：
-#     sh /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/rm-staging.sh \
-#        /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/_cleanup-20260912 --apply
+#     sh /volume2/docker_ssd/reseed/rm-staging.sh \
+#        /volume2/docker_ssd/reseed/_cleanup-20260912 --apply
 #   ★ 这条**不要**勾「发送运行详情」的意义不大（一次性、手动），但勾了也无害。
 #
 #   —— 旧根残留：**2026-09-13 已删完，闸 ③ 里那条 `case` 已撤**。

@@ -57,7 +57,7 @@ set -u
 #     写的是**宿主路径**。挂到别的路径 ⇒ compose 解析出的挂载会指向错地方。
 #   · `--compose` 的路径**不在容器里做存在性判断**：那是 watch-containers.sh
 #     的守卫（且它必须看到"和宿主一样"的路径语义）。
-DEFAULT_COMPOSE_DIR="${WATCH_COMPOSE_DIR:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink}"
+DEFAULT_COMPOSE_DIR="${WATCH_COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
 # ★ 项目 B（qbittorrent-reseed）的 compose 目录 —— 2026-10-01 加。
 #   它**不是**本项目栈，但 watch-containers.sh 现在也盯它（跨项目），故本循环要透传。
 DEFAULT_COMPOSE_DIR_QB="${WATCH_COMPOSE_DIR_QB:-/volume2/docker_ssd/qbittorrent-reseed}"

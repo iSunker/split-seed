@@ -21,8 +21,8 @@ DEFAULT_CADENCE_DAYS 注释里的取舍理由）：cross-seed 的 `timestamp` �
 
     # 2) 同步：把 cross-seed.db + 日志 + qB 的事实翻译成"每部到哪一步了"
     python scripts/reseed-state.py sync --pack frds-top250-2024 \\
-        --db-path  //YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink/cross-seed/cross-seed.db \\
-        --log //YOUR-NAS/docker_ssd/prowlarr_cross-seed_autohardlink/cross-seed/logs/info.current.log \\
+        --db-path  //YOUR-NAS/docker_ssd/reseed/cross-seed/cross-seed.db \\
+        --log //YOUR-NAS/docker_ssd/reseed/cross-seed/logs/info.current.log \\
         --qbit-url http://NAS_IP:3060
 
     # 3) 看还剩多少没搜 / 每站下次什么时候能重搜

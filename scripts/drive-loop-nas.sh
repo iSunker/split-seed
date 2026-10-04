@@ -6,7 +6,7 @@
 #     任务类型: 用户定义的脚本
 #     用户    : root          （要读 compose 目录里的 .env）
 #     计划    : 每天，频率「每 15 分钟」，首次 00:00 / 最后 23:59
-#     脚本    : sh /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/run.sh
+#     脚本    : sh /volume2/docker_ssd/reseed/drive-loop/run.sh
 #   ★ 建议不要勾「发送运行详情」—— 每 15 分钟一封邮件会淹掉真正的告警。
 #     要看结果就 ssh 上去跑一次，或直接看下面那两个日志文件。
 #

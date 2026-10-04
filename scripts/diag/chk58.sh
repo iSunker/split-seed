@@ -107,7 +107,7 @@ set -u
 export PYTHONIOENCODING=utf-8
 # ★ 同时把 LC_ALL 钉成 C 之外的值没有意义（群晖上是 C）；真正的保障是上面那行。
 
-COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink}"
+COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
 VOL1="${VOL1:-/volume1/video}"
 STATE="$COMPOSE_DIR/drive-loop/scripts/.drive-loop.state"
 DB="$COMPOSE_DIR/drive-loop/hlink/state.db"
@@ -156,7 +156,7 @@ case "$COMPOSE_DIR" in
         echo "!! COMPOSE_DIR 不是绝对路径（$COMPOSE_DIR）——" >&2
         echo "   ★★ 这条不是吹毛求疵：[1] 会拿**本机**的 docker 去查镜像，" >&2
         echo "      在开发机上会得到一个与 NAS 无关的 ✓（实测撞过）。" >&2
-        echo "   ⇒ 改传绝对路径（NAS 上是 /volume2/docker_ssd/prowlarr_cross-seed_autohardlink）。" >&2
+        echo "   ⇒ 改传绝对路径（NAS 上是 /volume2/docker_ssd/reseed）。" >&2
         exit 2 ;;
 esac
 

@@ -44,7 +44,7 @@
 #                                     # ★ 有漂移 → 退出码 1；无漂移 → 0（给计划任务判成败用）
 #
 # 环境变量
-#   COMPOSE_DIR  含 .env 的目录（默认 /volume2/docker_ssd/prowlarr_cross-seed_autohardlink）
+#   COMPOSE_DIR  含 .env 的目录（默认 /volume2/docker_ssd/reseed —— 改名后的新根）
 #   FARM         农场路径（默认 /volume1/video/download/reseed/reseed_farm）
 #                 ★ 2026-09-12 收进 reseed/ 父目录；改这里的同时必须改 .env 的
 #                   DATA_DIRS / LINK_DIR 两行（SUMMARY §18）
@@ -58,7 +58,7 @@
 # 是服务端真实硬链接。所以可以从 Windows 直接建场，少一道"拷脚本上去 + SSH"的工序。
 #
 # 从 Windows 跑时，`.env` 里的 `/volume1/...` 在本机不存在 → 用 --map 做前缀翻译：
-#   COMPOSE_DIR="//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink" \
+#   COMPOSE_DIR="//iSunker-DS423/docker_ssd/reseed" \
 #   FARM="//iSunker-DS423/video/download/reseed/reseed_farm" \
 #   sh build-farm.sh --map "/volume1=//iSunker-DS423" --apply
 #   ★ COMPOSE_DIR / FARM 必须写成**命令前缀的环境变量**（如上行）。
@@ -80,7 +80,7 @@
 # =====================================================================
 set -eu
 
-COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink}"
+COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
 FARM="${FARM:-/volume1/video/download/reseed/reseed_farm}"
 SUDO="${SUDO-sudo}"
 

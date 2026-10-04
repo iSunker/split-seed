@@ -30,7 +30,7 @@ import sys
 # 只搬这些键：DATA_DIRS 是本次的主角，LINK_DIR 一起带上以防生产是空的/写错。
 KEYS = ("DATA_DIRS", "LINK_DIR")
 
-DEFAULT_COMPOSE_DIR = "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+DEFAULT_COMPOSE_DIR = "/volume2/docker_ssd/reseed"
 
 TEMPLATE = r'''#!/bin/sh
 # =====================================================================

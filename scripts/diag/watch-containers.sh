@@ -93,8 +93,15 @@ set -u
 
 export PYTHONIOENCODING=utf-8
 
-COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink}"
+COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
 NOTIFY_ROOT="${NOTIFY_ROOT:-$COMPOSE_DIR/notify}"
+# ★★ 2026-10-04：`NOTIFY=0` ⇒ **不往 spool 投任何告警**（拉起动作照做）。
+#   起因：通知模块整体剥离（见本仓 `重构方案.md` §11）。**默认仍为 1** —— 保留写事件
+#   的能力，这样 NAS 上只要还留着 `notify-spool.sh`，巡检告警就还发得出去；
+#   等新通知项目接管后再在 compose 里把 `NOTIFY=0` 显式设上。
+#   ★ 判据：`NOTIFY` 只管「发不发」，**不管「拉不拉」** —— 两者必须能分开取证，
+#     否则"关告警"会连带把"自动拉起"也关掉（含义相反）。
+NOTIFY="${NOTIFY:-1}"
 DRY=0
 SELFTEST=0
 # ★ 自测用的假 docker（见 --selftest）。生产上必须是空串。
@@ -142,8 +149,10 @@ while [ $# -gt 0 ]; do
         --compose)  shift; COMPOSE_DIR="${1:-}" ;;
         --compose-qb) shift; COMPOSE_DIR_QB="${1:-}" ;;
         --notify)   shift; NOTIFY_ROOT="${1:-}" ;;
+        # ★ 关掉告警投递（拉起照做）。剥离通知模块后可用 `NOTIFY=0` 或本开关。
+        --no-notify) NOTIFY=0 ;;
         # ★ 半角括号 + ASCII 标点，理由见文件头（dash 取词器会在全角括号上截断）。
-        *) echo "未知参数: $1   (可用: --dry-run | --selftest | --selftest-live | --compose <dir> | --compose-qb <dir> | --notify <dir>)" >&2; exit 2 ;;
+        *) echo "未知参数: $1   (可用: --dry-run | --selftest | --selftest-live | --compose <dir> | --compose-qb <dir> | --notify <dir> | --no-notify)" >&2; exit 2 ;;
     esac
     shift
 done
@@ -170,7 +179,7 @@ NOTIFY_ROOT=$(printf '%s' "$NOTIFY_ROOT" | tr -d '\r\n' | sed 's/[[:space:]]*$//
 #    ★★ 守卫**能**挡的与**挡不了**的（写清楚，别高估它）：
 #       挡得了：Windows 盘符、UNC、反斜杠、相对路径 —— 四种「明显是开发机」的写法。
 #       挡不了：一个**长得像 NAS 的绝对路径**。实测：在开发机上传
-#         `--compose /volume2/docker_ssd/prowlarr_cross-seed_autohardlink` 会**通过**守卫，
+#         `--compose /volume2/docker_ssd/reseed` 会**通过**守卫，
 #         然后 `docker inspect` 打到**本机 Docker Desktop** ⇒ 四个容器全报「不存在」
 #         ⇒ 读数是「四个都没起」，而**真因是"问错了机器"**。
 #       ⇒ 这是**读数一样、含义相反**的同一族（B.10 第 14 条），守卫靠**路径**判不出来
@@ -206,7 +215,7 @@ if [ "$SELFTEST" = 0 ]; then
         *)
             echo "!! compose 目录不是绝对路径（$_cd_var）——" >&2
             echo "   ★★ 在开发机上它会拿**本机**的 docker 去查，得到一个与 NAS 无关的读数（实测撞过）。" >&2
-            echo "   ⇒ 改传绝对路径（NAS 上是 /volume2/docker_ssd/prowlarr_cross-seed_autohardlink）。" >&2
+            echo "   ⇒ 改传绝对路径（NAS 上是 /volume2/docker_ssd/reseed）。" >&2
             exit 2 ;;
     esac
     done
@@ -404,6 +413,7 @@ echo "=== watch-containers.sh   $(date '+%Y-%m-%d %H:%M:%S')   dry_run=$DRY ==="
 echo "    COMPOSE_DIR=$COMPOSE_DIR"
 echo "    COMPOSE_DIR_QB=$COMPOSE_DIR_QB"
 echo "    NOTIFY_ROOT=$NOTIFY_ROOT"
+echo "    NOTIFY=$NOTIFY   (0=不投告警，只上屏；拉起动作不受影响)"
 # ★ daemon 身份也打出来 —— 事后翻日志时能一眼看出"这次问的是哪台机器"。
 #   （没它就是 §32.8 那个洞：读数是「四个都没起」，而真因是「问错了机器」。）
 if [ -n "$DAEMON_ID" ]; then
@@ -598,7 +608,11 @@ if [ "$DAEMON_DOWN" = 1 ]; then
     say "    ⇒ 本趟**不拉起、不投逐容器告警**（那些结论在 daemon 不在时不成立）。"
     UNK=$((UNK + 1))
     SPOOL="$NOTIFY_ROOT/spool"; ARCHIVE="$NOTIFY_ROOT/archive"
-    if [ ! -d "$SPOOL" ]; then
+    if [ "$NOTIFY" = 0 ]; then
+        # ★ 通知已剥离/显式关闭：不投告警，但这一趟"未验"的**结论照样打屏**
+        #   （退出码仍是 2）—— 关的是信，不是判断。
+        say "  （NOTIFY=0：daemon 告警**不投递**，只上屏；结论仍为『未验』rc=2）"
+    elif [ ! -d "$SPOOL" ]; then
         na "spool 目录不存在（$SPOOL）—— daemon 告警**投不出去**"
     else
         _day=$(date '+%Y-%m-%d')
@@ -793,7 +807,11 @@ EOF
     #   不写新的状态文件 ⇒ 少一个要挂载的路径。
     SPOOL="$NOTIFY_ROOT/spool"
     ARCHIVE="$NOTIFY_ROOT/archive"
-    if [ ! -d "$SPOOL" ]; then
+    if [ "$NOTIFY" = 0 ]; then
+        # ★ 通知已剥离/显式关闭：逐容器告警**不投递**（拉起动作在上面已做完）。
+        #   ★ 结论照样上屏（`$STILL` 已在上面 `bad` 打过），关的只是这封信。
+        say "  （NOTIFY=0：逐容器告警**不投递**，只上屏；拉起动作不受影响）"
+    elif [ ! -d "$SPOOL" ]; then
         na "spool 目录不存在（$SPOOL）—— 告警**投不出去**（但拉起已做完）"
     else
         _day=$(date '+%Y-%m-%d')

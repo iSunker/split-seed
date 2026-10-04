@@ -35,7 +35,7 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-DEFAULT_DB = "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/cross-seed/cross-seed.db"
+DEFAULT_DB = "//iSunker-DS423/docker_ssd/reseed/cross-seed/cross-seed.db"
 
 #: 要检查的容器名（compose.yaml 里的 container_name）
 CONTAINER = "reseed-cross-seed"

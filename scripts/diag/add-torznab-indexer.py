@@ -60,7 +60,7 @@ except Exception:  # noqa: BLE001 —— 老 python 没有 reconfigure，乱码�
     pass
 
 #: 默认目标 = NAS 上的生产 `.env`。从 NAS 本机跑就换成本地路径那个写法。
-DEFAULT_ENV = "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink/.env"
+DEFAULT_ENV = "//iSunker-DS423/docker_ssd/reseed/.env"
 
 #: 默认要确保存在的索引器。1 = HDtime（2026-09-12 换了 cookie 后加回来）。
 DEFAULT_IDS = "1"
@@ -110,7 +110,7 @@ def commit(p: pathlib.Path, parts: list[str], i: int, value: str) -> pathlib.Pat
 
 def say_next_steps() -> None:
     print("\n下一步（必须做，否则不生效）—— 在 NAS 上：")
-    print("  cd /volume2/docker_ssd/prowlarr_cross-seed_autohardlink && "
+    print("  cd /volume2/docker_ssd/reseed && "
           "sudo docker compose up -d --force-recreate cross-seed")
     print("  ★ 同时确认 drive-loop 的 `--indexers` 里有（或已去掉）这个站，否则会触发"
           "「索引器自检」告警（那是**设计如此**，不是故障）。")

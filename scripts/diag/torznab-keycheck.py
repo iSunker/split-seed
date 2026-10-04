@@ -52,7 +52,7 @@ except Exception:  # noqa: BLE001
     pass
 
 #: 默认 = NAS 上的生产 compose 目录（Windows 侧走 UNC）。
-DEFAULT_COMPOSE = "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+DEFAULT_COMPOSE = "//iSunker-DS423/docker_ssd/reseed"
 
 #: Torznab 的 caps 端口（Prowlarr 已发布到宿主机）。
 USER_AGENT = "reseed-toolkit/probe"

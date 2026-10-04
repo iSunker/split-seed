@@ -52,7 +52,7 @@ except Exception:
     pass
 
 LOG = pathlib.Path(
-    r"//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+    r"//iSunker-DS423/docker_ssd/reseed"
     r"/cross-seed/logs/info.current.log")
 
 

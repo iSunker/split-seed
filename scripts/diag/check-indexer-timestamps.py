@@ -52,7 +52,7 @@ except Exception:  # noqa: BLE001 —— 老 python 没有 reconfigure，乱码�
     pass
 
 #: 默认 = NAS 上的生产 compose 目录（Windows 侧走 UNC）。
-DEFAULT_COMPOSE = "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+DEFAULT_COMPOSE = "//iSunker-DS423/docker_ssd/reseed"
 #: 默认闸门名单 = drive-loop-nas.sh 的 --indexers 打算用的那四个站。
 DEFAULT_EXPECT = "HDtime,HDFans,NanyangPT,BTSCHOOL"
 

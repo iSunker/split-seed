@@ -51,7 +51,7 @@ except Exception:  # noqa: BLE001 —— 老 python 没有 reconfigure，乱码�
     pass
 
 #: 默认 = NAS 上的生产 compose 目录（Windows 侧走 UNC）。
-DEFAULT_COMPOSE = "//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+DEFAULT_COMPOSE = "//iSunker-DS423/docker_ssd/reseed"
 
 #: ★ 白名单：只取这几格。多取一格都可能把凭据或无关内容带出来。
 ALLOW = ("indexerId", "escalationLevel", "disabledTill",

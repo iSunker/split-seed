@@ -31,8 +31,8 @@
 # =====================================================================
 
 CT="${PROBE_CONTAINER:-reseed-drive-loop}"
-DB="${PROBE_DB:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/hlink/state.db}"
-ORCH="${PROBE_ORCH:-/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/orchestrator}"
+DB="${PROBE_DB:-/volume2/docker_ssd/reseed/drive-loop/hlink/state.db}"
+ORCH="${PROBE_ORCH:-/volume2/docker_ssd/reseed/drive-loop/orchestrator}"
 
 echo "== 宿主侧前置核对（三步，任一步失败就没有读数，先看这里）=="
 if ! command -v docker >/dev/null 2>&1; then
@@ -96,7 +96,7 @@ IX = [s.strip() for s in os.environ.get("PROBE_INDEXERS", "").split(",") if s.st
 _C = []
 if os.environ.get("PROBE_ORCH"):
     _C.append(pathlib.Path(os.environ["PROBE_ORCH"]))
-_C.append(pathlib.Path("/volume2/docker_ssd/prowlarr_cross-seed_autohardlink"
+_C.append(pathlib.Path("/volume2/docker_ssd/reseed"
                        "/drive-loop/orchestrator"))
 _C.append(pathlib.Path(__file__).resolve().parent) if "__file__" in dir() else None
 for _c in _C:

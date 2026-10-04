@@ -33,7 +33,7 @@ try:
 except Exception:  # noqa: BLE001 —— 老 python 没有 reconfigure，乱码也比崩了强
     pass
 
-DEFAULT_DB = "/volume2/docker_ssd/prowlarr_cross-seed_autohardlink/drive-loop/hlink/state.db"
+DEFAULT_DB = "/volume2/docker_ssd/reseed/drive-loop/hlink/state.db"
 OLD = "/volume1/video/download/reseed_farm"
 NEW = "/volume1/video/download/reseed/reseed_farm"
 

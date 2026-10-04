@@ -43,7 +43,7 @@ except Exception:
     pass
 
 NAS = "//iSunker-DS423"
-COMPOSE = "%s/docker_ssd/prowlarr_cross-seed_autohardlink" % NAS
+COMPOSE = "%s/docker_ssd/reseed" % NAS
 DB_UNC = COMPOSE + "/drive-loop/hlink/state.db"
 
 #: 大包通常住在这两处（照 `.env.example` 的 `DATA_DIRS` 形状）。

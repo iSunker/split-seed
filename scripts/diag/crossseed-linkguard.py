@@ -37,7 +37,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 #: NAS 上的状态文件（drive-loop 写，本脚本读）。UNC 用**正斜杠** ——
 #: 反斜杠在这个 Git Bash → Python 的组合里会被当转义符吃掉（踩过）。
-DEFAULT_STATE = ("//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+DEFAULT_STATE = ("//iSunker-DS423/docker_ssd/reseed"
                  "/drive-loop/scripts/.linkguard.state")
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -66,7 +66,7 @@ def load_state(path: str) -> dict:
         print(f"✗ 找不到状态文件：{path}")
         print("  ⇒ drive-loop 还没跑过一次日报（基线是那时候起的锚）。")
         print("     当场起锚：在 NAS 上跑一次")
-        print("       sh /volume2/docker_ssd/prowlarr_cross-seed_autohardlink/"
+        print("       sh /volume2/docker_ssd/reseed/"
               "drive-loop/run.sh  （或 drive-loop.py --daily-now）")
         raise SystemExit(2)
     except Exception as e:                              # noqa: BLE001

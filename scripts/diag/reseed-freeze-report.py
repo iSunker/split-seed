@@ -58,7 +58,7 @@ DEFAULT_URL = "http://192.168.0.7:3060"
 
 #: NAS 上 drive-loop 写的那份基线（本脚本**只读**，仅用来对照计数）。
 #: ★ UNC 用**正斜杠** —— 反斜杠在这个 Git Bash → Python 的组合里会被当转义符吃掉。
-DEFAULT_STATE = ("//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink"
+DEFAULT_STATE = ("//iSunker-DS423/docker_ssd/reseed"
                  "/drive-loop/scripts/.reseed-freeze.state")
 
 STATE_KEY = "_reseed_freeze"

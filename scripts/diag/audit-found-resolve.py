@@ -59,7 +59,7 @@ try:
 except Exception:
     pass
 
-NAS = pathlib.Path(r"//iSunker-DS423/docker_ssd/prowlarr_cross-seed_autohardlink")
+NAS = pathlib.Path(r"//iSunker-DS423/docker_ssd/reseed")
 LOG = NAS / "cross-seed/logs/info.current.log"
 DB = NAS / "drive-loop/hlink/state.db"
 
