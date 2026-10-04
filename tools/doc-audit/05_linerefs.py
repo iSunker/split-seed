@@ -57,13 +57,14 @@ SKIP_DIRS = {".git", ".deploy-backup", ".claude", "__pycache__",
              ".venv-html-to-docx", "node_modules", "out"}
 
 #: ★★ **NAS 侧的部署名** —— 文档会引它们，但它们**在仓库里不存在**。
-#:   来源：`deploy.sh` 的 FILES 映射（本地路径 :: NAS 相对路径）。凡两侧**不同名**的，
+#:   来源：受管集合 `scripts/diag/check-deploy-drift.py` 的 `DEPLOY_MANIFEST` 映射
+#:   （本地路径 :: NAS 相对路径）。凡两侧**不同名**的，
 #:   两侧都是**合法的引用目标**（取决于文档在说"仓库里"还是"NAS 上"）。
 #: ★ 这条是**实测补上的假警报**：`run-resident.sh` 被引 3 次、仓库里找不到 ⇒ 我第一版
 #:   报「NO-FILE」，而它**是** `drive-loop/run-resident.sh`（本地叫
 #:   `scripts/drive-loop-resident.sh`）—— 94 处这么引，全对。
 #:   ⇒ 判据不能只看"仓库里有没有"（同 `B.10` 第 1 条：「某台机器上没有」≠「环境里都没有」）。
-#: ★ 维护方式：**只在两侧不同名时才需要登记**。`deploy.sh` 里同名的那一堆不用列。
+#: ★ 维护方式：**只在两侧不同名时才需要登记**。`DEPLOY_MANIFEST` 里同名的那一堆不用列。
 DEPLOY_ALIASES = {
     # ★★ 2026-10-05（B2/B3）：本地 compose 已改名 `docker-compose.yml` → `compose.yaml`。
     #   索引按**文件名**建键 ⇒ 旧文档（`summary/*` 等历史记录）里引的
@@ -71,7 +72,7 @@ DEPLOY_ALIASES = {
     #   （`A.11`）⇒ 用别名把它们**指向现在的本地文件**（同一份，只是改了名），
     #   让行号判据仍能对其生效。
     "docker-compose.yml": "compose.yaml",
-    # NAS 侧的部署名（`deploy.sh` 的 FILES 映射）—— 文档引它们时仓库里可能不同名。
+    # NAS 侧的部署名（`DEPLOY_MANIFEST` 映射）—— 文档引它们时仓库里可能不同名。
     # ★ 2026-10-05：源文件已随 data/ 收拢到 `data/drive-loop/`；别名给**新路径**。
     "run.sh": "data/drive-loop/run.sh",
     "run-resident.sh": "data/drive-loop/run-resident.sh",
@@ -190,6 +191,15 @@ KNOWN_STALE = {
         "历史存档：notify-spool.sh 已删除（Task C）；正文不追改",
     ("ENVIRONMENT.md", "notify-spool.sh:671"):
         "现场记录：notify-spool.sh 已删除（Task C）；该处是当时的操作留档，正文不追改",
+
+    # ★★ 2026-10-05（Stream A：删 deploy.sh）：`deploy.sh` 已**删除**
+    #   （部署模型改成「代码走镜像 + SSH 直推」，见 `重构方案.md` §8.5）⇒ 历史记录里
+    #   引它的行号成了 NO-FILE。两处**全在 `summary/*` 会话存档**（当时的现场读数）
+    #   —— **正文不许改**（`A.11`「过程记录不追改」）⇒ 逐条登记。
+    ("17-首次真跑的探针发现.md", "deploy.sh:157"):
+        "历史存档：deploy.sh 已删除（Stream A，2026-10-05）；当时现场读数，正文不追改",
+    ("32-容器巡检拉起件与四个真bug.md", "deploy.sh:98"):
+        "历史存档：deploy.sh 已删除（Stream A，2026-10-05）；当时现场读数，正文不追改",
 }
 
 

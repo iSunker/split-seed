@@ -225,9 +225,9 @@ do
         bad "$rel 不在 ⇒ 对应功能会**静默退化**，不是报错"
     fi
 done
-# ★ run-resident.sh 单独点名：本次刚进 deploy.sh 白名单，**生产上要靠 --apply 才会出现**
+# ★ run-resident.sh 单独点名：它已随代码入镜像（compose 的 entrypoint 指向 `/app/run-resident.sh`）
 if [ ! -e "$COMPOSE_DIR/drive-loop/run-resident.sh" ]; then
-    na "  ↑ run-resident.sh 缺 = 还没跑过 deploy.sh --apply（compose 的 command 就指向它）"
+    na "  ↑ run-resident.sh 缺 = 挂载区没有这份（★ 2026-10-05 起入口在镜像里，此处应视为历史挂载件）"
 fi
 echo
 fi

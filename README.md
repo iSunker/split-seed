@@ -21,6 +21,10 @@
 
 本次范围 = 做到"**单种在 :3060 成功做种**"。IYUU 扩散、别的大包，均**已预留接口**、本次不实现。
 
+> ★ **2026-10-05：`deploy.sh` 已删除。** 部署模型改为「**代码走 Docker Hub 镜像**
+> （本机 build + push，NAS `docker compose pull`）+ **compose/配置经 SSH 直推**（NAS 无 SFTP）」。
+> 受管文件登记在 `scripts/diag/check-deploy-drift.py` 的常量 `DEPLOY_MANIFEST` 里。
+
 ---
 
 ## ⚠ 免责声明与使用边界
@@ -98,7 +102,7 @@ qB recheck **不通过时不报错**，而是**就地重下**那几个 piece。�
 | 跑起来 / 继续跑 | **`ENVIRONMENT.md` `A.19`** ← 最常用，先看这个 |
 | **新会话开局 / 不了解这台机器** | ★ **先读 `CLAUDE.md`（唯一入口：开局三步 + 真源表）** → 再由它引到 **`ENVIRONMENT.md`**（环境前提 + 按症状 grep 的 `ERR-*`，含全部 20 项技术弯路）与 **`summary/26`**（干到哪了）|
 | 我卡住了（报错 / 搜不到 / 不动了） | **常见问题** + **`ENVIRONMENT.md` `A.19.1.9`**（交接必读的坑）→ 该文件的 `ERR-*`（按症状检索）|
-| **想从电脑上手动跑点什么** | **`ENVIRONMENT.md` `A.19.1.8`** ← 电脑只剩诊断用途（**都在 `scripts/diag/`**）：`deploy.sh`（推代码）、`check-deploy-drift.py`（查漂移）、`scan-secrets.py`（推前扫凭据）、`audit-found-*.py`（对账 `Found` 行） |
+| **想从电脑上手动跑点什么** | **`ENVIRONMENT.md` `A.19.1.8`** ← 电脑只剩诊断用途（**都在 `scripts/diag/`**）：`check-deploy-drift.py`（查漂移）、`scan-secrets.py`（推前扫凭据）、`audit-found-*.py`（对账 `Found` 行） |
 | **想知道 NAS 上有没有我不知道的文件** | **`ENVIRONMENT.md` `A.17.1`**（漂移哨兵）← `python scripts/diag/check-deploy-drift.py` |
 | **想推代码，但怕把密钥一起推上去** | **`ENVIRONMENT.md` `A.17.2`**（推前凭据扫描）← `python scripts/diag/scan-secrets.py`（绿了再 `git push`） |
 | 加站 / 换站 | **多站点** → SUMMARY §13.3（完整流程，可复用） |
@@ -124,7 +128,7 @@ qB recheck **不通过时不报错**，而是**就地重下**那几个 piece。�
 
 > **占位符约定**：为便于公开分享，文档与脚本里的真实主机名 / 内网 IP / 私有站名
 > 已替换为 `YOUR-NAS`、`NAS_IP`、`SiteA`、`SiteB`。照着做时请换成你自己的。
-> 脚本没有硬编码这些值 —— `scripts/diag/run-batch.sh` 与 `deploy.sh` 读环境变量，
+> 脚本没有硬编码这些值 —— `scripts/diag/run-batch.sh` 读环境变量，
 > 或读 `scripts/.nasrc`（已 gitignore）。完整对照表见 SUMMARY.md §0。
 
 ---
@@ -137,7 +141,6 @@ reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-se
 │                         #   + drive-loop + autoheal + watcher）；容器相关目录都收进 data/
 ├─ .env                   # 由 .env.example 复制而来；IP/密钥/路径/开关（单点维护）
 ├─ .env.example
-├─ deploy.sh              # 本地→NAS 的**配置同步**（只搬 compose + 配置；**代码走镜像**）
 ├─ data/                  # ★容器相关的**全部**内容（2026-10-05 收拢）
 │  ├─ cross-seed/
 │  │  ├─ config.js        # cross-seed 配置（从 .env 取值；含版本免责说明）→ 挂进 /config
@@ -162,7 +165,7 @@ reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-se
 
 > ★ 2026-10-05 结构变更（`重构方案.md` §8）：容器相关文件全部收进 `data/`，`data/` 平级
 >   只留**一个** `compose.yaml`；**代码只进镜像**（本机 build + push，NAS pull），
->   `deploy.sh` 只搬 compose 与配置。规则见 `.claude/rules`。
+>   compose/配置走 **SSH 直推**。规则见 `.claude/rules`。
 
 
 > 开发仓库里另有 `scripts/`（`run-batch.sh` 抽样脚本、`reseed-state.py` 状态机 CLI、
@@ -178,7 +181,7 @@ reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-se
 > 一条看 cross-seed 侧；key 从生产 `.env` 读、**绝不打印**，站名只取
 > `cross-seed.db` 的 `id`/`name` 两列〕、
 > `check-deploy-drift.py` **只读**的**漂移哨兵**（NAS 上有没有没登记的文件 / 仓库里有没有
-> 该部署却没进白名单的文件，见「漂移哨兵」一节，SUMMARY §18.14）、
+> 该部署却没进受管集合的已跟踪文件，见「漂移哨兵」一节，SUMMARY §18.14）、
 > `scan-secrets.py` **只读**的**推前凭据扫描**（按值的形状找漏进仓库的 cookie / apikey /
 > passkey，见「推前凭据扫描」一节，SUMMARY §18.15）、
 > `audit-found-lines.py` / `audit-found-resolve.py` **只读**的两道**对账**
@@ -191,7 +194,7 @@ reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-se
 > **分类目录名** —— `儿童` / `欧美剧` 这种**不是发布名**的目录，见下节
 > 「★★ 往 `DATA_DIRS` 里加路径」；清单在 `scripts/diag/datadirs_rules.py`）。
 > 其余工具要么跑在 NAS 上，要么是**手动**用的（不必进容器）。
-> ★ 2026-09-12 起电脑端只留 **`deploy.sh`**（推代码）、**`check-deploy-drift.py`**（查漂移）、
+> ★ 2026-09-12 起电脑端只留 **`check-deploy-drift.py`**（查漂移）、
 > **`scan-secrets.py`**（推前扫凭据）、**`audit-found-*.py`**（对账）、
 > **`prowlarr-indexerstatus.py`** / **`check-indexer-timestamps.py`**（查限流是哪一种）几个用途，
 > 见「⛔ 电脑端已不参与」。
@@ -222,7 +225,7 @@ reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-se
 | 动作 | 允许条件 |
 |---|---|
 | 只读 SMB / 只读 HTTP 端口 | 任何时刻 |
-| `deploy.sh --apply` | 批次间隙（它会覆盖正被 `sh` 读的脚本）|
+| `deploy.sh --apply`（已删，历史动作）| ~~批次间隙~~ —— 该动作已随 `deploy.sh` 删除；改配置现走 SSH 直推 |
 | `docker compose up -d --force-recreate` | 批次间隙 **+ 该重建确有必要** |
 | 改 `.env` 的 `DATA_DIRS` / `LINK_DIR` | 用 `gen-nas-env-update.py` 生成脚本，**不手敲** |
 | `build-farm.sh --apply` | 批次间隙（要写 NAS）|
@@ -369,16 +372,17 @@ docker compose run --rm reseed-orchestrator status                          # �
    * `>0` ⇒ **生效**：日报正文里该出现 `（95%，74/78）` 这样的「百分比 + 未约简分数」，
      分母为 0 的包写 **`（n/a）`**（**不是** `0%`），末尾还有一行 `总计：…  ← 各包之和，非平均值`。
    * `=0` ⇒ **没生效**。★ 先别怀疑代码 —— 按 `§26.15` 查**容器到底读的哪份 `drive-loop.py`**：
-     `drive-loop.py` **在镜像里与挂载里各有一份**，只有挂载那份会随 `deploy.sh` 更新。
+     `drive-loop.py` **在镜像里与挂载里各有一份**，只有镜像那份会随 `docker build/push` 更新
+     （旧文档里「随 `deploy.sh` 更新」的说法已随 `deploy.sh` 删除而作废）。
      ```bash
      # 判据只比 notify.py —— ★ 不要拿 drive-loop.py 的两份 md5 相比（那是个恒假的判据，见下）
      docker compose --profile drive-loop exec drive-loop sh -c 'md5sum /app/scripts/notify.py drive-loop/scripts/notify.py'
      ```
-     两行 **md5 相同** ⇒ 镜像不旧；**不同** ⇒ 镜像旧，**必须重建镜像并 `docker load`**（`deploy.sh --apply` 治不了）。
-     ★★ **`drive-loop.py` 不比 md5** —— 它的真源是**挂载那份**（`docker-compose.yml` 的
-     `entrypoint` 覆盖了镜像 `ENTRYPOINT`，`run-resident.sh` 里 `SCRIPT="$SELF_DIR/scripts/drive-loop.py"`
-     指的就是挂载区）。镜像里那份 `/app/scripts/drive-loop.py` 是**死代码**；且它是 **CRLF**，
-     而 `deploy.sh` 会把挂载那份剥成 LF ⇒ **两份 md5 永远不等**。拿它当判据 = **恒假的「狼来了」**
+     两行 **md5 相同** ⇒ 镜像不旧；**不同** ⇒ 镜像旧，**必须重建镜像**（`docker build` + `push` + NAS `pull`，SSH 直推配置治不了）。
+     ★★ **`drive-loop.py` 不比 md5** —— 它的真源是**镜像里那份**（`run-resident.sh` 里
+     `SCRIPT="$APP_DIR/scripts/drive-loop.py"`，`APP_DIR` 指向镜像 `/app`；compose `entrypoint` =
+     `sh /app/run-resident.sh`，**不再从挂载区读**）。镜像里那份是 **CRLF**，若挂载区另放一份会被剥成 LF
+     ⇒ **两份 md5 永远不等**。拿它当判据 = **恒假的「狼来了」**
      （平时假红、真出事也红，没人分得清）。详见 `SUMMARY §26.56` 四。
      `run-resident.sh` 已在启动时自检：读到不含 `PHASE_IDLE` 的旧代码会**退 3** 并在 `attempts.log` 留一行。
 
@@ -449,8 +453,9 @@ docker compose run --rm reseed-orchestrator status                          # �
   ★ 连带修掉一个更隐蔽的：`next_sleep()` 的在 `--once` 模式下**压根没接线**（结论只进日志），
   所以「站点在退避就缓一缓」这条策略**从来没生效过**。见 **SUMMARY §17.5.2~§17.5.4**。
 - **`attempts.log` 里出现 `exit=127 (no python: /usr/bin/python3)`，但同一批的 python 明明跑完了**：
-  **那是假象** —— `deploy.sh` 曾在脚本**运行中**覆盖它（`sh` 边读边执行，会从旧偏移读到新内容）。
-  `deploy.sh` 已改成**原子替换**（写 `.new` 再 `mv`，换 inode），并在检测到批次在跑时给出告警。
+   **那是假象** —— 旧的 `deploy.sh`（**现已删除**）曾在脚本**运行中**覆盖它（`sh` 边读边执行，会从旧偏移读到新内容）。
+   `deploy.sh` 当时已改成**原子替换**（写 `.new` 再 `mv`，换 inode），并在检测到批次在跑时给出告警；
+   现在配置改走 SSH 直推，同样要求「**批次间隙**」才动会被 `sh` 读的文件。
   判据：**同一次 `start` 没有配对的 `exit`** 时，先怀疑"脚本被换过"，别急着信那个退出码。详见 **SUMMARY §17.2**。
 
 ---
@@ -529,8 +534,9 @@ docker compose run --rm reseed-orchestrator status                          # �
 
 #### 生产 `.env` 怎么更新（本地改完要同步到 NAS）
 
-`deploy.sh` 的白名单**故意不含 `.env`**（怕覆盖生产上的真实密钥），所以 `DATA_DIRS` 得单独上 NAS 改。
-这条值长约 3.5 KB、含中文与全角括号、还有带空格的路径 —— **别手敲**。用生成器：
+`deploy.sh`（**现已删除**）的白名单**故意不含 `.env`**（怕覆盖生产上的真实密钥），所以 `DATA_DIRS` 得单独上 NAS 改；
+现在 `.env` 同样**不在受管集合（`DEPLOY_MANIFEST`）里**，仍要单独处理。这条值长约 3.5 KB、含中文与全角括号、
+还有带空格的路径 —— **别手敲**。用生成器：
 
 ```bash
 python scripts/diag/gen-nas-env-update.py          # 由本地 .env 生成 scripts/nas-update-env.sh

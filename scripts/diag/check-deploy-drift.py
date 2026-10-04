@@ -2,29 +2,32 @@
 # -*- coding: utf-8 -*-
 """NAS 漂移哨兵 —— **只读**。回答两个「有没有我不知道的东西」：
 
-  A. NAS 上  有没有**既不在部署白名单、也不在已知生产独有清单**里的文件？
-  B. 仓库里  有没有**既没进部署白名单、也没被明确标为「不部署」**的已跟踪文件？
+  A. NAS 上  有没有**既不在受管集合、也不在已知生产独有清单**里的文件？
+  B. 仓库里  有没有**既没进受管集合、也没被明确标为「不部署」**的已跟踪文件？
 
 为什么需要它
 ------------
-`deploy.sh` 是**白名单式、单向**（本地 → NAS）的：它保证白名单里那些文件两边
-一致，**白名单之外的一律不碰、也不报告**。于是两个方向都会悄悄长东西：
+本项目的部署是**白名单式、单向**（本地 → NAS）：`DEPLOY_MANIFEST`（本文件内的常量，
+见下）逐条列出「本地源 → 生产目的地」并保证两边一致，**集合之外的一律不碰、也不报告**。
+于是两个方向都会悄悄长东西：
 
   A 方向（NAS 上冒出来的）：手工拷上去的脚本、忘了删的一次性补丁、某次调试
      留下的产物。风险是它**不在任何同步机制里** —— 既不会被更新，也不会被
      发现，只会在某天以「NAS 上跑的行为和仓库里这份不一样」的形式咬人。
      前车之鉴：`build-farm.sh`、`fix-statedb-farm-root.py`、`nas-update-env.sh`
-     这三个都是这么手工躺在 NAS 上的，2026-09-12 才逐个收进白名单。
+     这三个都是这么手工躺在 NAS 上的，2026-09-12 才逐个收进受管集合。
 
-  B 方向（仓库里没登记的）：新写了个脚本，忘了加进 `deploy.sh` 的 FILES，
+  B 方向（仓库里没登记的）：新写了个脚本，忘了加进受管集合（`DEPLOY_MANIFEST`），
      于是「git 提交里有它、NAS 上没有它」—— 而没有任何东西会提醒你。
      这正是「git 提交时是不是 NAS 拿一部分、电脑拿一部分」那个问题的答案。
 
-★★ 受管集合**从 `deploy.sh` 的 FILES 数组解析出来，绝不在这里复制一份** ——
-   复制就是又造一个漂移源，还会和 deploy.sh 各自漂到不同的地方去。
-   解析一旦对不上（有 `::` 的行没解析出目的地）直接 exit 2：**宁可吵，也不误报**。
-   因为解析悄悄失败会让受管集合变空，于是「全部文件都不认识」这场假警报
-   会把真信号淹掉 —— 一个会误报的哨兵，两次之后就没人看了。
+★★ 受管集合**写在本文件的常量 `DEPLOY_MANIFEST` 里，绝不从别处解析、也不复制第二份**
+   —— 从前它是从 `deploy.sh` 的 `FILES` 数组正则解析出来的；`deploy.sh` 已于
+   2026-10-05 删除（部署模型改成：代码走 Docker Hub 镜像 + compose/配置经 SSH 直推），
+   于是这份登记搬进常量。**放这里仍然只有一份** —— 复制就是又造一个漂移源。
+   常量条数一旦明显变少（见 main() 里的 `< 5` 守卫）直接 exit 2：**宁可吵，也不误报**：
+   受管集合变空会让「全部文件都不认识」这场假警报把真信号淹掉 —— 一个会误报的哨兵，
+   两次之后就没人看了。
 
 用法
 ----
@@ -69,11 +72,60 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 # ★ 2026-09-18：本脚本从 `scripts/` 搬进 `scripts/diag/` ⇒ 多一层，`parent.parent`
-#   会指到 `scripts/` 而不是仓库根，于是 `deploy.sh` 找不到、整个哨兵 rc=2。
-#   ★ 判据是**它自己的输出**（「找不到 …/scripts/deploy.sh」）—— 这件事**没有测试守**，
+#   会指到 `scripts/` 而不是仓库根，于是受管集合的来源找不到、整个哨兵 rc=2。
+#   （当时来源是 `deploy.sh`；现改为本文件内的常量 `DEPLOY_MANIFEST`，见下。）
+#   ★ 判据是**它自己的输出**（B 方向「未登记」清单）—— 这件事**没有测试守**，
 #     而它坏起来的样子是"哨兵直接罢工"，比它该报的漂移更响。
 REPO = pathlib.Path(__file__).resolve().parent.parent.parent
-DEPLOY = REPO / "deploy.sh"
+
+# ============================================================================
+# ★★ 受管文件集 —— 「本地相对路径 → NAS 生产相对路径（compose 根视角）」。
+#
+#   ★ 2026-10-05：这里**原来**解析 `deploy.sh` 的 `FILES` 数组。`deploy.sh` 已**删除**
+#     （部署模型改成：代码走 Docker Hub 镜像 `isunker/reseed-toolkit-*` + compose/配置
+#     经 **SSH 直推**，NAS 无 SFTP ⇒ `ssh 'cat > <path>' < localfile`）——
+#     于是这份登记搬进本常量。**只此一份**：`tools/doc-audit/05_linerefs.py` 的
+#     `DEPLOY_ALIASES` 是写死的别名表、**不解析它**，所以不存在第二份可漂。
+#   ★ 判据不变：B 方向「已跟踪但没有明确表态」仍以它为准；
+#     `tests/test_drift_lists.py` 与 `tests/test_drive_loop_service.py` 都读它。
+#   ★★ 三条曾在 `deploy.sh` 里**写错**（少了 `data/` 前缀）—— 已按 `compose.yaml`
+#     的挂载源更正（`./data/cross-seed:/config`、`./data/hlink:/config`）：
+#       cross-seed/config.js            → data/cross-seed/config.js
+#       cross-seed/wait-for-qb.sh       → data/cross-seed/wait-for-qb.sh
+#       hlink/config.yml                → data/hlink/config.yml
+#     （错的后果：`deploy.sh` 会把它们推到生产**根**下不存在的 `cross-seed/`、`hlink/`
+#       ⇒ 容器 `/config` 里那份**永远是旧的**，而没有任何读数会报。`deploy.sh` 既然删了，
+#       这一族错误的载体随之消失，但登记里那三条路径**必须是对的**，否则哨兵会拿错路径比对。）
+# ============================================================================
+DEPLOY_MANIFEST = [
+    ("compose.yaml",                          "compose.yaml"),
+    # cross-seed 的 /config 挂载源是 ./data/cross-seed ⇒ 生产相对路径带 data/。
+    ("data/cross-seed/config.js",             "data/cross-seed/config.js"),
+    # cross-seed 的启动闸门（`entrypoint: ["/bin/sh", "/config/wait-for-qb.sh"]`）同在挂载区。
+    ("data/cross-seed/wait-for-qb.sh",        "data/cross-seed/wait-for-qb.sh"),
+    # 编排器(autohardlink)的 /config 挂载源是 ./data/hlink ⇒ 同样带 data/。
+    ("data/hlink/config.yml",                 "data/hlink/config.yml"),
+    (".dockerignore",                         ".dockerignore"),
+    # build-farm.sh：**同时**进镜像（/app/scripts/build-farm.sh）**和** compose 根 ——
+    #   因为 `drive-loop.py::_run_verify()` 用 `first_existing("build-farm.sh")` 在
+    #   CROSSSEED_DIRS（= 挂载的 compose 根）里找它，找不到就**静默跳过**农场巡检。
+    ("data/drive-loop/scripts/build-farm.sh", "build-farm.sh"),
+    # 下面三个是本机 `scripts/`（根）的源码/生成物，生产副本放在 compose **根目录**。
+    ("scripts/fix-statedb-farm-root.py",      "fix-statedb-farm-root.py"),
+    # nas-update-env.sh 是**生成物**（scripts/gen-nas-env-update.py 产出、被 gitignore），
+    #   只装载 DATA_DIRS + LINK_DIR 两个**路径**键，不含凭据（见 GENERATED_OK）。
+    ("scripts/nas-update-env.sh",             "nas-update-env.sh"),
+    ("scripts/rm-staging.sh",                 "rm-staging.sh"),
+    # 容器巡检拉起件（watcher 容器读 ⇒ 必须由部署机制保证两边一致）。
+    #   ★ 判据：「**容器/自动机制会不会读它**」—— 会 ⇒ 进本表；不会（人手动跑）⇒ 留 KNOWN_NAS。
+    ("data/scripts/diag/watch-containers.sh",      "data/scripts/diag/watch-containers.sh"),
+    ("data/scripts/diag/watch-containers-loop.sh", "data/scripts/diag/watch-containers-loop.sh"),
+]
+
+# ★★ 部署模型（2026-10-05 起）：本表**只登记 compose 与配置**。
+#   容器读的**代码**（`data/orchestrator/*`、`data/drive-loop/scripts/*`、`run-resident.sh`）
+#   已**全部**改由 **Docker Hub 镜像**携带 ⇒ 见下方 `IMAGE_ONLY`。
+#   改代码 = 本机 `docker build` + `docker push` + NAS `docker compose pull`。
 
 # ★ 严重度：杂物里有一类**不是噪音**，是「形似凭据泄漏」—— NAS 上躺着一份 `.env`
 #   的备份/变体。把它和 `__pycache__` 混在同一个计数里是错的：前者该有人立刻看一眼，
@@ -96,7 +148,7 @@ def is_alert(rule):
 # NAS 上**已知合理**的、不在白名单里的东西。每一条都要写清"为什么它该在 NAS 上"。
 # 判据用正则匹配 **POSIX 相对路径**（不含开头的 ./），比 fnmatch 的 `**` 语义更可控。
 KNOWN_NAS = [
-    # ---- 生产独有：含凭据 / 运行时状态，**故意**不进白名单（deploy.sh 原则第 2 条）----
+    # ---- 生产独有：含凭据 / 运行时状态，**故意**不进受管集合（见 DEPLOY_MANIFEST 上方）----
     (r"^\.env$",                                  "真实凭据"),
     # ★★ 2026-09-21 加：**SMB 客户端的临时残留**，不是任何人有意放上去的东西。
     #   实测 `stat`：0 字节、属主 **197609(艾森克)**（= Windows 侧用户，NAS 上的
@@ -188,15 +240,16 @@ KNOWN_NAS = [
     (r"^_cleanup-[0-9]{8}/",                      "杂物·本哨兵 --cleanup 暂存区（确认后在 NAS 上整个删掉）"),
     # ★★★ 2026-09-29（**曾在此登记，现已移出** —— 留痕，因为它是一次"结论反转"）：
     #   原先这里有一条 `^scripts/diag/watch-containers\.sh$`，理由是
-    #   「NAS 侧手放的运行件，故意不走 deploy.sh」。
+    #   「NAS 侧手放的运行件，故意不走部署机制」。
     #   **同日方案改了**：从「DSM 计划任务（宿主跑）」改成**常驻容器**
-    #   （`reseed-watcher`，见 `docker-compose.yml` 那段头注）
-    #   ⇒ 那两个脚本现在是**容器读的**，必须由 `deploy.sh` 保证两边一致
-    #   ⇒ 已**移进 FILES**（见 `deploy.sh` 末尾那两条）。
-    #   ★ 若有人发现 NAS 上有一份而 FILES 里没有 —— 那是**旧状态**，跑一次
-    #     `deploy.sh --apply` 即正。
+    #   （`reseed-watcher`，见 `compose.yaml` 那段头注）
+    #   ⇒ 那两个脚本现在是**容器读的**，必须由部署机制保证两边一致
+    #   ⇒ 已**移进受管集合**（见 `DEPLOY_MANIFEST` 末尾那两条）。
+    #   ★ 若有人发现 NAS 上有一份而该表里没有 —— 那是**旧状态**，跑一次
+    #     SSH 直推（见 `DEPLOY_MANIFEST`）即正。
     #   ★★ **判据一句话**（这次反转换来的）：
-    #      **「容器/自动机制会不会读它」** —— 会 ⇒ `FILES`；不会（人手动跑）⇒ `KNOWN_NAS`。
+    #      **「容器/自动机制会不会读它」** —— 会 ⇒ `受管集合(DEPLOY_MANIFEST)`；
+    #      不会（人手动跑）⇒ `KNOWN_NAS`。
     #      不是按"它是不是诊断件"分，也不是按"它会不会改生产"分
     #      （`chk58.sh` 与它两个条件都一样，却分属两表 —— 差别**只在**这一点）。
 ]
@@ -207,6 +260,17 @@ CLUTTER = re.compile(r"^杂物·")
 LOCAL_ONLY = [
     (r"^\.gitattributes$",                        "仓库元数据"),
     (r"^\.gitignore$",                            "仓库元数据"),
+    # ★ 2026-10-05：这三条是本轮「删 deploy.sh、重建登记机制」时**顺手补登**的
+    #   —— 它们是**早已入库、却一直没被表态**的已跟踪文件（哨兵 B 方向一直在报它们）。
+    #   ★ 之所以要补而不是放着：**「常红的闸门 = 没有闸门」** —— 一个天天报 3~4 条噪音的
+    #     哨兵，真报出漂移时那一条会混在同样的噪音里没人看（本文件自己反复吃过这个形状）。
+    #   ★ `.claude/rules`：给**读仓库的 AI/人**看的项目规约，NAS 运行时一个字都不读它。
+    (r"^\.claude/",                               "仓库规约（给读仓库的 AI/人看；NAS 运行时不用）"),
+    # `data/drive-loop/state/` 是 drive-loop 的**运行态挂载目录**（compose 把它挂成 `/state`），
+    #   `.gitkeep` 只是让它进 git、保证挂载点存在 ⇒ 生产那份是**运行时生成的**，不部署它自身。
+    (r"^data/drive-loop/state/",                  "运行态挂载目录（compose 挂成 /state；生产内容运行时生成，不部署）"),
+    # `重构方案.md`：本次结构重构的**方案与推导记录**（文档，不上 NAS）。
+    (r"^重构方案\.md$",                            "文档·结构重构方案与推导记录（不上 NAS）"),
     (r"^\.env\.example$",                         "模板；生产用真实 .env，白名单**故意**不含它"),
     (r"^README\.md$",                             "文档"),
     (r"^SUMMARY\.md$",                            "文档"),
@@ -227,9 +291,14 @@ LOCAL_ONLY = [
     #   INDEX-USAGE.md 是这些投影的**用法 + 两周观察基线**（09-13 建 / 09-20 复跑 /
     #   09-27 决策）—— 给人和工具看的说明，**不是第三份事实源**。
     (r"^tools/doc-audit/",                        "文档审计工具 + 索引用法（在 Windows 上跑；只读 md + UNC 只读 + HTTP 只读；不选 indexer.url 列，出口统一 redact()）"),
-    (r"^deploy\.sh$",                             "同步工具本身（在 Windows 上跑）"),
+    # ★★ 2026-10-05：`(r"^deploy\.sh$", "同步工具本身（在 Windows 上跑）")` 这条**已删除**
+    #   —— `deploy.sh`（旧的 SMB 白名单同步）已**整个删掉**（部署模型改成：代码走镜像 +
+    #   compose/配置经 SSH 直推），留着它就成了**死规则**（匹配不到任何已跟踪文件），
+    #   而死规则比缺规则更坏：它看起来已经登记了，下一个人不会再去看它一眼
+    #   （`tests/test_drift_lists.py` ②段会当场把它报红）。
+    #   ★ 受管集合的登记见本文件顶部的常量 `DEPLOY_MANIFEST`。
     # ★ 2026-09-17：/volume1 可用空间的 NAS 侧判据。它是**一次性诊断件**，但留下来
-    #   可复用（下次再遇"读数对不上"直接拿它跑），所以**进版本库、不进白名单**。
+    #   可复用（下次再遇"读数对不上"直接拿它跑），所以**进版本库、不进受管集合**。
     #   判据与上面 doc-audit / qb-census 那几条**同一形状**：
     #   **只读 + 不回显凭据 + 只打聚合**（它不是"碰没碰凭据"的问题 —— 它根本不碰凭据，
     #   只跑 df / btrfs filesystem usage / subvolume list）。
@@ -303,14 +372,14 @@ LOCAL_ONLY = [
     #   而且 zip 是**内存里**解、不落盘。它存在的理由是**留一句否定结论的证据**：
     #   「报告里没有可用空间」这个结论决定了一条待办（见 README 的 #77）。
     (r"^scripts/diag/sa-volume-usage\.py$",            "只读群晖 Storage Analyzer 报告（在 Windows 上跑；内存解 zip、不落盘、无凭据）"),
-    # ★ 2026-09-13：#58「drive-loop 迁容器」的草案，**故意不进白名单**。
+    # ★ 2026-09-13：#58「drive-loop 迁容器」的草案，**故意不进受管集合**。
     #   它与 scripts/drive-loop-nas.sh 是同一层的东西（NAS 侧入口），差别只在
-    #   后者**已经**在生产跑、前者还没有。白名单的语义是「两边必须一致」——
-    #   现在收进去，下次谁跑一次 `deploy.sh --apply` 就会把它推到生产，
+    #   后者**已经**在生产跑、前者还没有。受管集合的语义是「两边必须一致」——
+    #   现在收进去，下次谁跑一次 `SSH 直推` 就会把它推到生产，
     #   而它没有任何东西调用它 ⇒ 制造一个**假一致**（生产上有个看着像"在用的那套"
     #   的文件，而 DSM 任务调的其实还是 `drive-loop/run.sh`）。
-    #   **先验，后进白名单**。验通过后的正确做法不是删掉这一行、而是：
-    #   把它加进 deploy.sh 的 FILES，**并从本清单里移除**（两处必须同时改，
+    #   **先验，后进受管集合**。验通过后的正确做法不是删掉这一行、而是：
+    #   把它加进 DEPLOY_MANIFEST，**并从本清单里移除**（两处必须同时改，
     #   只改一处就会被 B 方向当场报出来 —— 这正是这份清单存在的意义）。
     (r"^scripts/diag/drive-loop-docker\.sh$",          "**已作废**（#58 的 docker run 草案）—— 取代它的是 compose.yaml 里的 drive-loop 服务；保留为推导记录（挂载清单 + 三条容器方言），**不部署**"),
     (r"^data/prowlarr/\.gitkeep$",                "占位符；生产的 prowlarr/ 是**不许碰**的（2026-10-05 随 data/ 收拢）"),
@@ -340,14 +409,14 @@ LOCAL_ONLY = [
     #     **unknown 一律不放行**（宁可要人确认，也不在"不知道"时写生产库）。
     (r"^scripts/diag/rotate-crossseed-key\.py$",      "换 cross-seed.db 的 apikey 列（在 Windows 上跑；写工具，含容器闸 unknown 不放行）"),
     # #58 的挂载自证：三查（硬编码目录 / state.db 里的绝对路径 / .env 前缀）。
-    #   ★ **它属于 #58，沿用 `drive-loop-docker.sh` 那条先例**：迁容器的东西**故意不进白名单**。
-    #     白名单的语义是「两边必须一致」，现在收进去 ⇒ 下次 deploy.sh --apply 就把它推到生产
-    #     ⇒ 制造**假一致**。**先验，后进白名单**（本会话已在本机验过正例+两反例，
+    #   ★ **它属于 #58，沿用 `drive-loop-docker.sh` 那条先例**：迁容器的东西**故意不进受管集合**。
+    #     受管集合的语义是「两边必须一致」，现在收进去 ⇒ 下次 SSH 直推 就把它推到生产
+    #     ⇒ 制造**假一致**。**先验，后进受管集合**（本会话已在本机验过正例+两反例，
     #     但**还没在 NAS 的容器里真跑过** ⇒ 仍不算"验通过"）。
-    (r"^scripts/diag/drive-loop-mount-selfcheck\.sh$","#58 挂载自证（未部署，先验后进白名单；本机验过正例+两反例）"),
+    (r"^scripts/diag/drive-loop-mount-selfcheck\.sh$","#58 挂载自证（未部署，先验后进受管集合；本机验过正例+两反例）"),
     # #58 的 **NAS 侧启用前验证**（2026-09-17 重建）。★ 与 `chk-volume1-free.sh` / 挂载自证同族：
-    #   在 **NAS 上**跑、只读、不进容器 ⇒ **故意不进白名单**（进白名单 = 下次
-    #   `deploy.sh --apply` 就推到生产 = 假一致）。
+    #   在 **NAS 上**跑、只读、不进容器 ⇒ **故意不进受管集合**（进受管集合 = 下次
+    #   `SSH 直推` 就推到生产 = 假一致）。
     #   ★★ 它是**重建件**：原版叫 `<compose>/_tmp58/_chk58.sh`，按 `A.2.1` 当**一次性件**
     #     放临时目录、用完删 —— **但删的时候判据一起没了**（git 全历史搜不到任何代码，
     #     只有两处提到它的名字）。「五段只读验证」要验哪五段，当时**没有任何地方记下来**。
@@ -355,14 +424,14 @@ LOCAL_ONLY = [
     #       理由就是「判据必须能复原」—— 脚本可以重写，但"该验什么"不能再丢一次。
     #   ★ 本机验过：正例全绿 + 八个反例各自红（见文件头那张自测表）。
     (r"^scripts/diag/chk58\.sh$",                     "#58 NAS 侧启用前验证（重建；只读、在 NAS 上跑、不进容器 ⇒ 不部署）"),
-    # #58 的镜像定义。★ 同上面那条：属于**迁容器**的东西，**故意不进白名单**
-    #   （进白名单 = 下次 deploy.sh --apply 就推到生产 = 假一致）。
+    # #58 的镜像定义。★ 同上面那条：属于**迁容器**的东西，**故意不进受管集合**
+    #   （进受管集合 = 下次 SSH 直推 就推到生产 = 假一致）。
     #   ★ 它还有个**只有它才有的**理由：本仓的 docker build 上下文是**仓库根**，
     #     而 NAS 上的构建上下文是 **compose 目录** —— 两边的相对路径不同，
     #     直接拷过去也 build 不起来（`COPY scripts/…` 在 NAS 上找不到 orchestrator/）。
-    #     ⇒ 真要上 NAS，得连构建方式一起设计，不是"加进 FILES"就完事。
+    #     ⇒ 真要上 NAS，得连构建方式一起设计，不是"加进受管集合"就完事。
     # ★ 2026-10-05：drive-loop.Dockerfile 已随 data/ 收拢 → `data/drive-loop/Dockerfile`，
-    #   且归入上面的 IMAGE_ONLY（它是**镜像定义**，本机构建，不走 deploy FILES）。
+    #   且归入上面的 IMAGE_ONLY（它是**镜像定义**，本机构建，不走受管集合）。
     #   ⇒ 这一条 LOCAL_ONLY 规则随之删除（否则成死规则）。
     # ==========================================================================
     # ★ 2026-09-17 补登记**本来就在库里、却一直没登记**的 —— 哨兵这些天一直红着。
@@ -387,8 +456,8 @@ LOCAL_ONLY = [
 
     # ★★ 2026-09-22：`--pool` 报「没有待搜索项」的容器内探针。与上面
     #   `drive-loop-mount-selfcheck.sh` 那条**同一形状**（#58 一族）
-    #   ⇒ **故意不进白名单**：它是**诊断件**，靠 `docker cp` 送进容器跑，
-    #     不由任何生产路径调用；收进白名单 = 下次 `deploy.sh --apply` 就把它
+    #   ⇒ **故意不进受管集合**：它是**诊断件**，靠 `docker cp` 送进容器跑，
+    #     不由任何生产路径调用；收进受管集合 = 下次 `SSH 直推` 就把它
     #     推到生产 = 制造**假一致**（生产上多个谁也调不动的文件）。
     #   ★ 性质（逐条实测，不是声明）：**只读**（`mode=ro` + `PRAGMA query_only=1`，
     #     且**不跑 schema 迁移** —— 那会 `ALTER TABLE`）、**零网络请求**、
@@ -399,11 +468,11 @@ LOCAL_ONLY = [
     (r"^scripts/diag/probe-pool\.py$",            "`--pool` 空池探针（**容器内**跑：只读 mode=ro + query_only、零请求、无凭据；诊断件，故意不部署）"),
     # ★★ 2026-09-22 第二版：**宿主侧**单文件自包含版。第一版（上面那个）走不通 ——
     #   它得先 `docker cp` 进容器，而 NAS 上**还没有 `scripts/` 目录**
-    #   （`deploy.sh --apply` 一直没跑）⇒ `lstat … no such file` 起手就死，
+    #   （`SSH 直推` 一直没跑）⇒ `lstat … no such file` 起手就死，
     #   而 `docker cp` 读的是**发送端**文件系统、容器挂载盖不到它 ⇒ 那条路不通。
     #   这一版把要跑的东西整个装进一个 heredoc，`docker exec -i` 喂 stdin
     #   ⇒ 宿主上**只需一个文件**（`cat > p.sh` 一次粘完）。
-    #   ★ 与 `chk-volume1-free.sh` 同族：**在 NAS 上跑**、只读、**故意不进白名单**。
+    #   ★ 与 `chk-volume1-free.sh` 同族：**在 NAS 上跑**、只读、**故意不进受管集合**。
     (r"^scripts/diag/q\.py$",                     "待搜池查询（在 **NAS** 上经 docker exec 跑；只读 mode=ro + query_only、**回读 state.py 的 md5** 否则拒绝出数；诊断件，故意不部署）"),
     (r"^scripts/diag/probe-pool-nas\.sh$",        "`--pool` 空池探针·宿主侧单文件版（在 **NAS** 上跑；heredoc→docker exec -i，只读、零请求、无凭据；故意不部署）"),
     # ★★ 2026-09-24：`q2.py` 的登记**迟到 3 天**（它 09-21 `f9c67bb` 就提交了）。
@@ -417,8 +486,8 @@ LOCAL_ONLY = [
     #     `q.py` 是 `cat > q.py` 粘到 **compose 根**（`<compose>/q.py`），
     #     `q2.py` 则是 `docker cp` 进**容器**（落 `/tmp` 或 `/app` 一类的镜像内路径）。
     #     ⇒ 「在 NAS 上跑」这四个字**不够**，必须写明**落在哪个文件系统**。
-    #   ★ 为什么它俩都不进 `deploy.sh` 的 FILES：它们是**一次性探针**（用完即弃），
-    #     收进 FILES = 下次 `deploy.sh --apply` 就把它们推到生产 = **假一致**
+    #   ★ 为什么它俩都不进 `DEPLOY_MANIFEST`：它们是**一次性探针**（用完即弃），
+    #     收进受管集合 = 下次 `SSH 直推` 就把它们推到生产 = **假一致**
     #     （生产上多两个**没有任何东西调用**的文件）。
     (r"^scripts/diag/q2\.py$",                     "待搜池**逐层定位**探针（**docker cp 进容器** `/tmp` 跑：开可写库复刻 `__init__`、`Q_SKIP_INIT=1` 可退回只读；诊断件，故意不部署）"),
     # ★★ 2026-09-24：`TV/` 大包「扫描报告」。与 `find-packs.py` / `split-pack.py` **同一形状**
@@ -455,9 +524,9 @@ LOCAL_ONLY = [
     #   （(A) 轮询拉起 / (B) 并进 autoheal / (C) 独立心跳），用户拍的是 (A)。
     #   ★ 与 `chk58.sh` / `chk-volume1-free.sh` / `probe-pool-nas.sh` **同族**：
     #     **在 NAS 宿主机上跑**（DSM 计划任务，每 5–10 分钟一趟）、**不进容器**
-    #     ⇒ **故意不进白名单**。收进 FILES = 下次 `deploy.sh --apply` 就把它推到生产
+    #     ⇒ **故意不进受管集合**。收进受管集合 = 下次 `SSH 直推` 就把它推到生产
     #     = **假一致**，且这里还有一层更硬的：它的存在意义就是**盯着容器在不在跑**，
-    #     若它自己是被 `deploy.sh` 推上去的，那它「没跑」与「没推」在盘上长得一样。
+    #     若它自己是被部署机制推上去的，那它「没跑」与「没推」在盘上长得一样。
     #   ★ 它**不是只读件**（与上面 `chk-volume1-free.sh` 那条的关键区别）—— 它会：
     #     ① `docker compose ... up -d`（拉起容器）；② 往 `$NOTIFY_ROOT/spool/` 投告警。
     #     所以它的登记理由**不是**「只读」那三条，而是「**属于 NAS 运行时的宿主侧件**」。
@@ -466,73 +535,44 @@ LOCAL_ONLY = [
     #     下一个会话会以为「它已经上 NAS 了」，而盘上根本没有 ⇒ **容器没人盯**，
     #     且这件事**没有任何读数会报出来**（正是它自己要防的那个形状）。
     #   ★ 交付方式：它与 `chk58.sh` 同一层 —— **NAS 侧手放**，
-    #     不靠 `deploy.sh`。★ 现状（2026-09-29 更新）：**已上 NAS**
+    #     不靠部署机制。★ 现状（2026-09-29 更新）：**已上 NAS**
     #     （用户给了 SSH ⇒ 当场手工放到 `scripts/diag/`，与 `chk58.sh` 同层），
     #     真机四条全验（真 `inspect` 字段 / `--profile` 真拉起 / spool 真发信 /
     #     非 root 即可读 daemon）。
     #   ★★★ 2026-09-29 二次更新：**它已改走 `deploy.sh` FILES**（即**不在**本表里了）。
     #     为什么改：**方案从"DSM 计划任务"改成了"常驻容器"**（`reseed-watcher`）——
     #     那两个脚本现在是**容器读的**，容器读的是 compose 目录里那份
-    #     ⇒ 必须靠 `deploy.sh` 保证两边一致。
-    #     ★ 而**原来那条理由**（"进 FILES = 假一致"）针对的是**宿主计划任务**：
+    #     ⇒ 必须靠部署机制保证两边一致。
+    #     ★ 而**原来那条理由**（"进受管集合 = 假一致"）针对的是**宿主计划任务**：
     #       那时"谁在跑"与"deploy 推了什么"无关；现在**容器就是运行体**
     #       ⇒ 推上去正是它该走的路。★ 判据一句话：
-    #       **「容器/自动机制会不会读它」—— 会 ⇒ 进 FILES；不会（人手动跑）⇒ 留 KNOWN_NAS。**
+    #       **「容器/自动机制会不会读它」—— 会 ⇒ 进受管集合；不会（人手动跑）⇒ 留 KNOWN_NAS。**
     #     ★★ 这条**留在注释里而不是删掉**：因为它是"同一个文件、两个相反结论"的现场 ——
     #       下一个人看到 `chk58.sh` 在 KNOWN_NAS、`watch-containers.sh` 在 FILES，
     #       会以为前者漏登了。理由必须在场。
 ]
 
 # ★★ 2026-10-05（B2/B3，「代码入镜像」模型）：**由镜像携带**的已跟踪源码。
-#   判据：既**不**进 `deploy.sh` 的 FILES（代码不再靠文件同步上 NAS），
+#   判据：既**不**进 `DEPLOY_MANIFEST`（代码不再靠文件同步上 NAS），
 #   也**不**是"本机专属不部署"（它们在**容器里跑** —— 只是**走镜像**不是走文件）。
 #   ⇒ 与 LOCAL_ONLY 分开列，语义不同：LOCAL_ONLY = "生产上根本没有它"；
 #     IMAGE_ONLY = "生产上有它，但它是 build 进镜像的，文件同步碰不到它"。
-#   ★ 为什么不把它们塞进 FILES：那正是 §26.15 的病根（一份代码两个真源、会漂）。
+#   ★ 为什么不把它们塞进受管集合：那正是 §26.15 的病根（一份代码两个真源、会漂）。
 #     改这些文件 ⇒ `docker build` + `docker push` + NAS `docker compose pull`。
 IMAGE_ONLY = [
     (r"^data/orchestrator/",                      "编排器源码（build 进 reseed-orchestrator 镜像）"),
     (r"^data/drive-loop/scripts/",                "drive-loop 源码（build 进 reseed-drive-loop 镜像）"),
     (r"^data/drive-loop/run-resident\.sh$",       "drive-loop 容器内常驻入口（build 进镜像 = /app/run-resident.sh）"),
     (r"^data/drive-loop/Dockerfile$",             "drive-loop 镜像定义（本机构建）"),
-    (r"^data/drive-loop/run\.sh$",                "drive-loop 宿主 --once 入口（DSM 任务计划调，手工放 NAS；不走 deploy FILES）"),
+    (r"^data/drive-loop/run\.sh$",                "drive-loop 宿主 --once 入口（DSM 任务计划调，手工放 NAS；不走受管集合）"),
 ]
 
 # 受管、但**不在 git 里**的本地源（正常情况只有生成物）。没列在这里的会被 B 方向报出来 ——
-# 「deploy.sh 会把它拷到 NAS，可它没有版本历史」这件事必须有人明确认过。
+# 「部署机制会把它拷/推到 NAS，可它没有版本历史」这件事必须有人明确认过。
 GENERATED_OK = {
     "scripts/nas-update-env.sh":
         "生成物（scripts/gen-nas-env-update.py 产出，故被 gitignore）；只带 DATA_DIRS/LINK_DIR 两个路径键",
 }
-
-
-def parse_deploy_files(text):
-    """从 deploy.sh 解析 FILES 数组。返回 (entries, unparsed, err)。"""
-    lines = text.splitlines()
-    start = None
-    for i, ln in enumerate(lines):
-        if re.match(r"^\s*FILES=\(", ln):
-            start = i
-            break
-    if start is None:
-        return None, None, "deploy.sh 里找不到 `FILES=(` 这一行"
-
-    entries, unparsed = [], []
-    for ln in lines[start + 1:]:
-        s = ln.strip()
-        if s == ")":
-            break
-        if not s or s.startswith("#"):
-            continue
-        v = s
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
-            v = v[1:-1]
-        if "::" not in v:
-            unparsed.append(s)          # 形如 `::` 的行却没给目的地 → 解析器坏了
-            continue
-        src, dst = v.split("::", 1)
-        entries.append((src.strip(), dst.strip()))
-    return entries, unparsed, None
 
 
 def walk_nas(root):
@@ -643,32 +683,20 @@ def main():
     cleanup = "--cleanup" in argv
     fail = 0
 
-    # ---------- 0) 解析 deploy.sh（受管集合的唯一来源）----------
-    if not DEPLOY.is_file():
-        print(f"✗ 找不到 {DEPLOY}", file=sys.stderr)
-        return 2
-    entries, unparsed, err = parse_deploy_files(
-        DEPLOY.read_text(encoding="utf-8", errors="replace"))
-    if err:
-        print(f"✗ {err}", file=sys.stderr)
-        return 2
-    if unparsed:
-        print(f"✗ FILES 里有 {len(unparsed)} 行没解析出目的地（口径变了？）：", file=sys.stderr)
-        for s in unparsed[:10]:
-            print(f"    {s}", file=sys.stderr)
-        return 2
+    # ---------- 0) 受管集合：本文件内的常量 `DEPLOY_MANIFEST`（唯一来源）----------
+    #   ★ 2026-10-05：从前这里解析 `deploy.sh` 的 `FILES`。`deploy.sh` 已删 ⇒ 改为读常量。
+    entries = DEPLOY_MANIFEST
     if len(entries) < 5:
-        print(f"✗ FILES 只解析出 {len(entries)} 条 —— 明显不对，拒绝据此判定"
+        print(f"✗ DEPLOY_MANIFEST 只有 {len(entries)} 条 —— 明显不对，拒绝据此判定"
               f"（受管集合变空会把所有文件误报成「未知」）", file=sys.stderr)
         return 2
 
     managed = {d for _, d in entries}          # 生产侧相对路径
     local_managed = {s for s, _ in entries}    # 本地侧相对路径
-    print(f"NAS 漂移哨兵（只读）   受管集合解析自 deploy.sh：{len(entries)} 条")
+    print(f"NAS 漂移哨兵（只读）   受管集合 = 内置 DEPLOY_MANIFEST：{len(entries)} 条")
     dup = len(entries) - len(local_managed)
     print(f"  生产目的地 {len(managed)} 个 / 本地源 {len(local_managed)} 个"
-          + (f"（{dup} 条是同一源部署到多个目的地，如 orchestrator/__init__.py "
-             f"既进构建上下文又进 drive-loop/）" if dup else ""))
+          + (f"（{dup} 条是同一源部署到多个目的地）" if dup else ""))
 
     # ---------- A 方向：NAS ----------
     if not no_nas:
@@ -732,24 +760,24 @@ def main():
             #   于是这里不认一次快照：直接 stat 复核，stat 说在 → 那是"看不清"，不是"漂移"。
             gone, phantom = split_missing(dst, missing)
             if phantom:
-                print(f"\n       ⚠ NAS 枚举**不完整**：{len(phantom)} 个白名单文件第一次没列出来、"
+                print(f"\n       ⚠ NAS 枚举**不完整**：{len(phantom)} 个受管文件第一次没列出来、"
                       f"直接 stat 却在（例：{phantom[0]}）。")
                 print("         这是 SMB 读取抖动，不是漂移 —— 本次**不做**「文件不见了」的判断，请复跑一次。")
                 return 2
-            print(f"\n       ⚠ 白名单里有 {len(gone)} 个目的地 NAS 上**不存在**"
-                  f"（deploy.sh 会把它们标成 [新]）：")
+            print(f"\n       ⚠ 受管集合里有 {len(gone)} 个目的地 NAS 上**不存在**"
+                  f"（SSH 直推时会把它们标成 [新]）：")
             for d in gone:
                 print(f"           {d}")
             fail = 1
 
         if groups["unknown"]:
             print(f"\n       ★ 未知文件 {len(groups['unknown'])} 个 —— "
-                  f"既不在 deploy.sh 白名单、也不在 KNOWN_NAS 清单里：")
+                  f"既不在 DEPLOY_MANIFEST、也不在 KNOWN_NAS 清单里：")
             for rel in groups["unknown"][:60]:
                 print(f"           {rel}")
             if len(groups["unknown"]) > 60:
                 print(f"           …（还有 {len(groups['unknown']) - 60} 个）")
-            print("         → 三种可能，逐个定性：① 该收进 deploy.sh 的 FILES；"
+            print("         → 三种可能，逐个定性：① 该收进 DEPLOY_MANIFEST；"
                   "② 该加进本脚本的 KNOWN_NAS（并写清理由）；③ 该删。")
             fail = 1
 
@@ -771,7 +799,7 @@ def main():
             print_cleanup_plan(dst, clutter_items)
 
     # ---------- B 方向：本地仓库 ----------
-    print("\n[ B ]  本地仓库：已跟踪、但没进白名单 / 也没声明「不部署」的")
+    print("\n[ B ]  本地仓库：已跟踪、但没进受管集合 / 也没声明「不部署」的")
     try:
         # ★ 必须 `-c core.quotepath=false`，且**不能用 text=True**：
         #   git 默认把非 ASCII 路径转义成 `"\350\265\260..."` —— 一整串**纯 ASCII**，
@@ -800,7 +828,7 @@ def main():
         if why:
             rows.append(("local", rel, why))
             continue
-        # ★★ 2026-10-05：**镜像携带**的源码（既不进 FILES，也不是"不部署"）。
+        # ★★ 2026-10-05：**镜像携带**的源码（既不进受管集合，也不是"不部署"）。
         img = next((w for rx, w in IMAGE_ONLY if re.search(rx, rel)), None)
         rows.append(("image", rel, img) if img else ("unknown", rel, None))
 
@@ -809,19 +837,19 @@ def main():
     n_i = sum(1 for k, _, _ in rows if k == "image")
     n_u = sum(1 for k, _, _ in rows if k == "unknown")
     print(f"       已跟踪 {len(tracked)} 个文件：")
-    print(f"         ✓ 会部署（在 FILES 里）     {n_m:>6}")
+    print(f"         ✓ 会部署（在 DEPLOY_MANIFEST 里） {n_m:>6}")
     print(f"         ✓ 走镜像（IMAGE_ONLY）      {n_i:>6}")
     print(f"         ✓ 明确不部署                {n_l:>6}")
     print(f"         ★ 未登记                    {n_u:>6}")
 
-    # 受管、但不在 git 里的本地源：deploy.sh 照样会把它拷上 NAS，可它没有版本历史。
+    # 受管、但不在 git 里的本地源：部署机制照样会把它拷/推到 NAS，可它没有版本历史。
     # 生成物属于这一类，但要**逐条认过**才放行（见 GENERATED_OK）。
     untracked_src = sorted(local_managed - set(tracked))
     if untracked_src:
         declared = [s for s in untracked_src if s in GENERATED_OK]
         undeclared = [s for s in untracked_src if s not in GENERATED_OK]
         print(f"\n       ── 受管、但不在 git 里的本地源：{len(untracked_src)} 个"
-              f"（deploy.sh 仍会拷，但无版本历史）──")
+              f"（部署时仍会拷/推，但无版本历史）──")
         for s in declared:
             print(f"         ✓ {s}\n             {GENERATED_OK[s]}")
         for s in undeclared:
@@ -834,7 +862,7 @@ def main():
         for k, rel, _ in rows:
             if k == "unknown":
                 print(f"           {rel}")
-        print("         → 二选一：① 该上 NAS 就加进 deploy.sh 的 FILES；"
+        print("         → 二选一：① 该上 NAS 就加进 DEPLOY_MANIFEST；"
               "② 不该上就加进本脚本的 LOCAL_ONLY（写明理由）。")
         fail = 1
 

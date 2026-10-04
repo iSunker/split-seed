@@ -47,12 +47,13 @@ WORKDIR /app
 #
 #   ⇒ ★★ **纪律（两条，缺一不可）**
 #     ① **改了 `scripts/drive-loop.py` / `reseed-state.py` / `build-farm.sh` 之后，
-#        必须重建本镜像并 `docker load` 到 NAS** —— 光 `deploy.sh --apply`
-#        （推挂载那份）**不够**，上面那次实测就是这么坏掉的。
-#     ② **改完必须回读**：容器里 `/app/scripts/drive-loop.py` 与挂载那份
-#        **md5 必须相同**。判据（NAS，单行）：
+#        必须重建本镜像并 push 到 NAS**（`docker build` + `push` + `docker compose pull`）
+#        —— 光 SSH 直推配置**不够**，上面那次实测就是这么坏掉的。
+#     ② **改完必须回读**：容器里 `/app/scripts/drive-loop.py` 与本地那份
+#        **md5 必须相同**（★ `drive-loop.py` 有 `--check` 之类判活信号可用，别只信时间戳）。判据（NAS，单行）：
 #          docker compose --profile drive-loop exec drive-loop \
-#            md5sum /app/scripts/drive-loop.py drive-loop/scripts/drive-loop.py
+#            md5sum /app/scripts/drive-loop.py
+#          # 与本地 `md5sum data/drive-loop/scripts/drive-loop.py` 比对
 #        ★ `run-resident.sh` 已加启动自检：读到不含 `PHASE_IDLE` 的旧代码会
 #          **退非零并在 attempts.log 留一行** —— 别让"跑了旧代码"再变成静默。
 #

@@ -99,7 +99,8 @@ COMPOSE = REPO / "compose.yaml"
 RESIDENT = REPO / "data" / "drive-loop" / "run-resident.sh"
 DOCKER_PY = REPO / "data" / "drive-loop" / "scripts" / "drive-loop.py"
 NAS_SH = REPO / "data" / "drive-loop" / "run.sh"
-DEPLOY = REPO / "deploy.sh"
+# ★ 2026-10-05：`DEPLOY = REPO / "deploy.sh"` 已删（deploy.sh 整个删掉）——
+#   受管集合改从哨兵内的常量 `DEPLOY_MANIFEST` 读（见 ⑥ 段里的 `_M`）。
 MOUNT_SELFCHECK = REPO / "scripts" / "diag" / "drive-loop-mount-selfcheck.sh"
 CHK58 = REPO / "scripts" / "diag" / "chk58.sh"
 
@@ -866,49 +867,52 @@ ck("★★ ⑤q 哨兵的 KNOWN_NAS 显式登记了 `.state.tmp` 临时名",
 
 
 # ==========================================================================
-print("\n=== ⑥ deploy.sh：新脚本收进白名单 ===")
+print("\n=== ⑥ DEPLOY_MANIFEST：新脚本收进受管集合 ===")
 # ==========================================================================
-_DEP = DEPLOY.read_text(encoding="utf-8") if DEPLOY.is_file() else ""
-# ★★ 2026-10-05（B2/§8.3）：模型改为「代码全在镜像里」⇒ drive-loop 的**代码**
-#   （run-resident.sh / run.sh / drive-loop.py）**不再走 deploy.sh 白名单**，
+# ★★ 2026-10-05（B2/§8.3 + 删 deploy.sh）：模型改为「代码全在镜像里」⇒ drive-loop 的
+#   **代码**（run-resident.sh / run.sh / drive-loop.py）**不再进受管集合**，
 #   改由 `drive-loop.Dockerfile` 的 `COPY data/drive-loop/…` 打进镜像。
-#   ⇒ 断言随之翻转：**必须不在 FILES 里**（进了就是"改代码走文件同步"的旧模型回潮），
+#   ★ 受管集合的来源同时从「解析 deploy.sh 的 FILES」改为**哨兵内的常量 `DEPLOY_MANIFEST`**
+#     （`deploy.sh` 已整个删除）。这里载入哨兵本身，直接读那个常量。
+#   ⇒ 断言随之翻转：**必须不在受管集合里**（进了就是"改代码走文件同步"的旧模型回潮），
 #     且**必须在 Dockerfile 的 COPY 里**（否则容器里没有入口脚本）。
-ck("⑥a deploy.sh 的 FILES **不含** drive-loop 代码（已改走镜像）",
-   "drive-loop/run-resident.sh" not in _DEP and "drive-loop/scripts/drive-loop.py" not in _DEP,
-   "drive-loop 代码又回到文件同步白名单了 ⇒ 两个真源，会漂")
+import importlib.util                             # noqa: E402
+_DRIFT_MODNAME = "check_deploy_drift_for_service"
+_spec_d = importlib.util.spec_from_file_location(
+    _DRIFT_MODNAME, REPO / "scripts" / "diag" / "check-deploy-drift.py")
+_M = importlib.util.module_from_spec(_spec_d)
+sys.modules[_DRIFT_MODNAME] = _M                  # ★ 必须在 exec_module 之前（tests/README 的规矩）
+_spec_d.loader.exec_module(_M)
+# 受管集合的「条目行」形态：`本地::目的地`（与旧 `_DEP` 解析同形，便于逐条点名）。
+_DEP_ENTRIES = [f"{s}::{d}" for s, d in _M.DEPLOY_MANIFEST]
+ck("⑥a drive-loop 代码**不在**受管集合里（已改走镜像）",
+   not any("drive-loop/run-resident.sh" in e or "drive-loop/scripts/drive-loop.py" in e
+           for e in _DEP_ENTRIES),
+   "drive-loop 代码又回到文件同步受管集合了 ⇒ 两个真源，会漂")
 _DLDF = (REPO / "data" / "drive-loop" / "Dockerfile")
 _DLDF_SRC = _DLDF.read_text(encoding="utf-8") if _DLDF.is_file() else ""
 ck("⑥b drive-loop.Dockerfile 把常驻入口 COPY 进镜像（/app/run-resident.sh）",
    "COPY data/drive-loop/run-resident.sh /app/run-resident.sh" in _DLDF_SRC,
    "镜像里没有入口脚本 ⇒ compose 的 entrypoint /app/run-resident.sh 找不到文件")
-#   ★ chk58.sh **故意不进** FILES（它是 NAS 侧诊断件，不部署）——
+#   ★ chk58.sh **故意不进**受管集合（它是 NAS 侧诊断件，不部署）——
 #     这条钉的是"别顺手把它加进去"（加了就是**假一致**：生产上有个没人调的脚本）。
-#   ★★ 2026-09-29 修正判据**取法**（原来的写法被一次**注释**弄红了，留痕）：
-#     原来写 `"chk58.sh" not in _DEP` —— 那是**全文子串搜索**，
-#     而本轮我在 deploy.sh 里加了一条**解释性注释**（说明"chk58.sh 这类
-#     人手动跑的件为什么留在 KNOWN_NAS"）⇒ **注释里出现了那个字符串** ⇒ 误报。
-#     ★ 而同一次改动里 watch-containers.sh **确实**进了 FILES —— 两者一真一假，
-#       若照原判据就得把**正确的注释**删掉去迎合断言（**本末倒置**）。
-#     ⇒ 判据改成"**FILES 数组里的条目**"（只看条目行，不看注释）：
-#       这才是它**本来要钉的东西**（"别把 chk58.sh 收进白名单"）。
-#     ★ 教训：**守卫量的东西要对准它声称的意图**；全文子串会把"提到它"当成"用了它"。
-_DEP_ENTRIES = [ln.strip() for ln in _DEP.split("\n")
-                if ln.strip().startswith('"') and "::" in ln]
-ck("★ ⑥c chk58.sh **不在** FILES 的条目里（NAS 侧诊断件，不部署；加进去=假一致）",
+#   ★★ 取法**必须看「条目」不看「全文」**（2026-09-29 的教训，留痕）：
+#     判据改成"**受管集合里的条目**"（只看条目，不看注释）——这才是它本来要钉的东西
+#     （"别把 chk58.sh 收进受管集合"）。全文子串会把"提到它"当成"用了它"。
+ck("★ ⑥c chk58.sh **不在**受管集合的条目里（NAS 侧诊断件，不部署；加进去=假一致）",
    not any("chk58.sh" in e for e in _DEP_ENTRIES),
-   "chk58.sh 被加进 FILES 了：" + repr([e for e in _DEP_ENTRIES if "chk58.sh" in e]))
-#   ★ 反向对照：判据本身要能判红（防恒真）—— 造一条假的"已加入" FILES 行
-_FILES_FAKE = _DEP + '\n  "scripts/diag/chk58.sh::scripts/diag/chk58.sh"\n'
-_FAKE_ENTRIES = [ln.strip() for ln in _FILES_FAKE.split("\n")
-                 if ln.strip().startswith('"') and "::" in ln]
+   "chk58.sh 被加进受管集合了：" + repr([e for e in _DEP_ENTRIES if "chk58.sh" in e]))
+#   ★ 反向对照：判据本身要能判红（防恒真）—— 造一条假的"已加入"条目
+_FILES_FAKE = _DEP_ENTRIES + ["scripts/diag/chk58.sh::scripts/diag/chk58.sh"]
 ck("★ ⑥c′ 对照：**真把 chk58.sh 加进条目**时，上面那条**判得红**（防恒真）",
-   any("chk58.sh" in e for e in _FAKE_ENTRIES),
+   any("chk58.sh" in e for e in _FILES_FAKE),
    "判据恒真 ⇒ 它什么也没钉住")
 #   ★★ 同时把**本轮新加的那两个**也钉住（否则 ⑥c 只钉了"没加什么"）
-ck("★ ⑥d watch-containers.sh 与 -loop 都在 FILES 里（容器读它们 ⇒ 必须由 deploy 保证一致）",
-   any("scripts/diag/watch-containers.sh::" in e for e in _DEP_ENTRIES)
-   and any("scripts/diag/watch-containers-loop.sh::" in e for e in _DEP_ENTRIES),
+#   ★ 判据锚在**目的地侧**（`::…/watch-containers.sh`）—— 因为 `data/scripts/diag/...`
+#     这个前缀随收拢变过，锚子串会因为前缀变而失配（⑥d 之前正是这么假红的候选）。
+ck("★ ⑥d watch-containers.sh 与 -loop 都在受管集合里（容器读它们 ⇒ 必须由部署机制保证一致）",
+   any(e.endswith("::data/scripts/diag/watch-containers.sh") for e in _DEP_ENTRIES)
+   and any(e.endswith("::data/scripts/diag/watch-containers-loop.sh") for e in _DEP_ENTRIES),
    repr([e for e in _DEP_ENTRIES if "watch-containers" in e]))
 
 # ==========================================================================

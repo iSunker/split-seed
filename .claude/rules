@@ -3,6 +3,10 @@
 > 本文件**只写本次结构重构（2026-10-05，`重构方案.md` §8）新立的规矩 + 指针**。
 > 与 `CLAUDE.md` 已有事实冲突时以 `CLAUDE.md` 为准；本文件不复制它的内容
 > （守 `A.11`「同一事实只在一处维护」）。
+>
+> ★ **2026-10-05：`deploy.sh` 已删除。** 部署模型改为「代码走 Docker Hub 镜像 +
+> compose/配置经 **SSH 直推**」；受管文件登记从「解析 `deploy.sh` 的 `FILES`」搬到
+> `scripts/diag/check-deploy-drift.py` 的常量 **`DEPLOY_MANIFEST`**。
 
 ---
 
@@ -32,7 +36,7 @@
 - **容器读的代码要么在镜像里、要么挂载 1:1 同路径。** 本仓已选**代码全在镜像里**：
   `data/orchestrator/*`、`data/drive-loop/scripts/*`、`data/drive-loop/run-resident.sh`
   全部由 Dockerfile `COPY` 进镜像（`/app/…`）。
-- **改这些代码 ⇒ 重建镜像 + push + NAS pull**，`deploy.sh` **碰不到它们**（已从 FILES 移除）。
+- **改这些代码 ⇒ 重建镜像 + push + NAS pull**，不受管文件集（`DEPLOY_MANIFEST`）**碰不到它们**。
   ★ 病根见 `SUMMARY §26.15`（一份代码三个副本、生产读到旧的那份、`packpct` 全 0，**不报错**）。
 - 镜像内布局**固定**：`/app/scripts/` + `/app/orchestrator/`（`drive-loop.py` 靠 `sys.path` 找 orchestrator；
   它用「向上找含 `orchestrator/` 的那层」定 ROOT，本机 `data/` 与镜像 `/app` 都对）。
@@ -49,8 +53,8 @@
 - **代码**走 Docker Hub 镜像：`isunker/reseed-toolkit-drive-loop:<短sha>` /
   `isunker/reseed-toolkit-orchestrator:<短sha>`（tag = git 短 sha）。本机 `docker build` → `push` → NAS `pull`。
   ★ NAS 上**不许 build**（那边没有源码树）。
-- **compose / 配置**走 `deploy.sh`（白名单同步，原子替换 + 本地备份 + 可达性闸门 —— 这些血泪保留）。
-  它现在**只管 compose 与配置**；`[A] 代码 ⇒ 走镜像`，不再 `build`。
+- **compose / 配置**走 **SSH 直推**（NAS 无 SFTP ⇒ `ssh 'cat > <path>' < <localfile>`，逐文件原子替换 + 本地备份 + 可达性闸门 —— 这些血泪保留）。
+  受管文件集写在 `scripts/diag/check-deploy-drift.py` 的常量 `DEPLOY_MANIFEST` 里；`[A] 代码 ⇒ 走镜像`。
 - 改代码的正确流程：`docker build` → `push` → NAS `docker compose pull <服务> && up -d --force-recreate <服务>`。
 
 ## 6. 闸门命令（抄 `CLAUDE.md §3`，含推 Docker Hub 前）
@@ -75,6 +79,6 @@ docker compose -f compose.yaml config --quiet   # compose 语法
 
 - 断言/登记**逐条点名**，不用"全部满足 X"这种会被无关输入影响的判据（见
   `tests/test_drive_loop_service.py` ①k 的重写：从"每条挂载都 1:1"改成"逐条点名四条挂载"）。
-- 新增/删文件后登记要跟上：`deploy.sh` FILES / `scripts/diag/check-deploy-drift.py` 的
-  `LOCAL_ONLY` · `KNOWN_NAS` · **`IMAGE_ONLY`**（本次新加：走镜像的源码）。
+- 新增/删文件后登记要跟上：`scripts/diag/check-deploy-drift.py` 的常量 **`DEPLOY_MANIFEST`** /
+  `LOCAL_ONLY` · `KNOWN_NAS` · **`IMAGE_ONLY`**（走镜像的源码）。
   漏登记会被 `tests/test_drift_lists.py` 报出来（死规则亦然）。

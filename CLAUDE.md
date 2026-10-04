@@ -102,8 +102,9 @@ for t in tests/test_*.py; do python "$t" >/dev/null 2>&1 || echo "✗ $t"; done 
 
 ## 4. 硬限制（别指望做到）
 
-- **NAS 无 SSH**（22 关闭）⇒ 容器环境变量、`synoschedtask`、真发邮件**探针做不了**，
-  只能走"等价物"（如容器 env → `cross-seed.db` 的 `indexer` 表）。
+- **NAS 有 SSH shell（端口 `36688`，22 仍关闭）但无 SFTP** ⇒ 可 `ssh` 执行命令、可用 `ssh 'cat > <path>'` 推文件；
+  但仍**不能 `scp`**。容器环境变量、`synoschedtask`、真发邮件**探针**仍只能走"等价物"
+  （如容器 env → `cross-seed.db` 的 `indexer` 表）。
 - **`:3060` 是与别人共用的 qB** ⇒ 凡读它**必须按 `category` 收窄**（我们的是 `reseed-singles`）。
 - **文档审计只扫仓库根的 `*.md`** ⇒ `tools/`、`tests/` 下的 md（含 `INDEX-USAGE.md` 自己）**没人查**。
 - **`Task#N` 不是文档锚点** —— 只在当次会话的棋盘里有意义，**会话结束就找不到**。

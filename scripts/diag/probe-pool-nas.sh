@@ -5,7 +5,7 @@
 # 为什么是"宿主机 + docker exec 内嵌 python"这个形状
 # ------------------------------------------------
 #   · `scripts/diag/probe-pool.py` 得先进容器 ⇒ 而 NAS 上**还没有 scripts/ 目录**
-#     （`deploy.sh --apply` 一直没跑）⇒ `docker cp` 起手就 `lstat … no such file`
+#     （这些本机诊断件一直没往 NAS 推）⇒ `docker cp` 起手就 `lstat … no such file`
 #     ⇒ 而 `docker cp` 读的是**发送端**文件系统，容器挂载盖不到它，那条路不通。
 #   · ⇒ 这份把"要跑什么"整个装进**一个 heredoc**，`docker exec -i` 喂给容器里的 python。
 #     ★ 宿主上**只需要一个文件**：`cat > p.sh` 一次粘完。

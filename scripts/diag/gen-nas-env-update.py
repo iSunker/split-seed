@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """从本地 .env 的 DATA_DIRS 生成「NAS 一键更新 .env」的 shell 脚本。
 
-**为什么需要它**：`deploy.sh` 的白名单**故意不含 `.env`**（怕覆盖生产上的真实
+**为什么需要它**：受管集合（`DEPLOY_MANIFEST`）**故意不含 `.env`**（怕覆盖生产上的真实
 密钥），所以生产 `.env` 的 `DATA_DIRS` 一直是老值。改 `.env` 只能手动上 NAS 改，
 而这条 `DATA_DIRS=` 长达 ~3.5 KB、含 CJK 与全角括号、还有带空格的路径 ——
 手敲必错。所以：本地 `.env` 是唯一事实源，本脚本把它「编译」成一段可粘贴的

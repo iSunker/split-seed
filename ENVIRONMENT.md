@@ -12,7 +12,7 @@ derived_from:
   - 走过的弯路.md       # 20 项技术弯路全表（★ 2026-09-13 已**并入本文并删除**，见附录 2）
   - tests/README.md    # 测试层踩过的坑 + 行形陷阱
   - .env.example       # 配置键清单（纯占位符，无凭据值）
-  - docker-compose.yml / deploy.sh / patch 文件
+  - docker-compose.yml / patch 文件      # （旧 deploy.sh 已于 2026-10-05 删除）
 precedence: |
   运维事实（主机名 / 路径 / 调度 / 读数基线）**以本文为准**（`A.13`–`A.19`）。
   ★★ **文档分工与优先级见 `CLAUDE.md` 的真源表**（唯一完整版，别在本文复述 —— `A.11`）。
@@ -78,7 +78,7 @@ grep -n '弯路 #' ENVIRONMENT.md
 |---|---|
 | NAS | Synology **DS423+**，DSM **7.2**，主机名 **`iSunker-DS423`** |
 | NAS 局域网 IP | **`192.168.0.7`**（`.env.example` 里是 `192.168.1.10` 占位符，别照抄）|
-| NAS 侧 shell | ★ **没有** —— SSH(22) 关闭。只读走 SMB，写走 `deploy.sh` 或用户在 DSM 里执行 |
+| NAS 侧 shell | ★ **有** —— SSH 端口 **36688**（22 关闭），可直接 `ssh` 执行；只读也可走 SMB，写操作经 **SSH 直推**（`ssh 'cat > <path>'`）或用户在 DSM 里执行 |
 | 开发机 | Windows 11 Pro，MINGW64 / Git Bash，控制台代码页 **GBK** |
 | 工作目录 | `D:\Projects\reseed` |
 | 临时目录 | `C:\Users\艾森克\.claude\jobs\<job>\tmp`（后台任务）／`D:\tmp`（人工诊断）|
@@ -256,7 +256,7 @@ NAS 上还跑着**别人的**容器（IYUU Plus、另一套 qB、opencd），它
 - ❌ `docker system prune -a`
 - ❌ 对链接文件 `chown -R`（硬链接与源是**同一个 inode**，会改掉**源文件**属主）
 - ❌ 走 **DSM File Station 删除**（只是挪进 `#recycle`，文件仍在盘上）
-- ❌ 别在**批次运行中** `deploy.sh --apply`
+- ❌ 别在**批次运行中**用 SSH 直推覆盖会被 `sh` 读取的文件（如 `run.sh`）
 - ❌ 别用 **DSM File Station** 做删除；别往 `/volume1` 写真实文件
 - ❌ 别对大包根打 webhook（`ERR-HTTP-04`）
 - ❌ 别 `cp` 生产 SQLite 库来做诊断（丢 WAL，`ERR-SQL-01`）
@@ -272,7 +272,7 @@ NAS 上还跑着**别人的**容器（IYUU Plus、另一套 qB、opencd），它
 | 文件寿命 | 放哪 | 例 |
 |---|---|---|
 | **一次性的**（中转包、验证脚本、导入的 tar） | ★ **专用的临时目录 + 用完立刻删** —— 目录名要**一眼看出是临时的**（如 `<compose>/_tmp-<用途>/`），**不许放共享根**、**不许放 `/volume1`** | `_drive-loop-img.tar.gz`、`_tmp129/` 下的 `_del.sh` |
-| **长期用的**（脚本、配置、日志、状态） | ★ **只在生产地址**：`/volume2/docker_ssd/reseed/` 下**它该在的那一层**（见 `deploy.sh` 的 FILES 映射）；★ 或**入库**（在 NAS 上手工跑、只进 `scripts/diag/check-deploy-drift.py` 的 `LOCAL_ONLY`） | `drive-loop/scripts/*`、`notify/*`；`scripts/diag/chk58.sh`、`scripts/diag/chk-volume1-free.sh` |
+| **长期用的**（脚本、配置、日志、状态） | ★ **只在生产地址**：`/volume2/docker_ssd/reseed/` 下**它该在的那一层**（见 `scripts/diag/check-deploy-drift.py` 的 `DEPLOY_MANIFEST` 映射）；★ 或**入库**（在 NAS 上手工跑、只进 `scripts/diag/check-deploy-drift.py` 的 `LOCAL_ONLY`） | `drive-loop/scripts/*`、`notify/*`；`scripts/diag/chk58.sh`、`scripts/diag/chk-volume1-free.sh` |
 
 > ★★ **一条代价（2026-09-17 实测，它把这条规则的边界划出来了）**：
 > **「用完就删」是对的，但"判据"不能跟着脚本一起删。**
@@ -296,7 +296,7 @@ NAS 上还跑着**别人的**容器（IYUU Plus、另一套 qB、opencd），它
 3. ★ **哨兵会替你查**：`python scripts/diag/check-deploy-drift.py` 的 A 方向会报"未登记/未知" ——
    **它红了就要么登记、要么删**，不许让它常红。
 
-**要在"批次间隙"才能做的事**：`deploy.sh --apply`（覆盖正被 `sh` 读的脚本）、`--force-recreate`。
+**要在"批次间隙"才能做的事**：SSH 直推覆盖会被 `sh` 读取的文件（如 `run.sh`）、`--force-recreate`。
 （★ 判「批次在不在跑」看 `.drive-loop.state` 的 `running_pid`；**逐个动作的允许条件表 + 改动前自检清单在 README「开工前的两道门」**。）
 
 **一站一批的动作**：qB 的 `setLocation` —— 按 `save_path` 分组、一批一次调用（实测 500 条只有 3 个
@@ -614,8 +614,9 @@ qB 校验队列单线程。
   | **NAS 宿主机** `<compose>/drive-loop/**` | DSM 计划任务直接跑 | **拷完即生效**，下次唤醒就用新的，**不用动容器** |
   | **容器内** | `cross-seed` 用官方镜像，**完全不吃我们的文件** | 只能改 `config.js`（挂载进去的）|
 
-- `deploy.sh` 白名单（**唯一**从 Windows 发起的写操作）当前 **28 个文件**，见 `deploy.sh` 的 `FILES` 数组 ——
-  ★ **那是唯一一份拷贝**，漂移哨兵从它解析受管集合，别复制第二份。
+- 受管集合（`DEPLOY_MANIFEST`，**唯一**从 Windows 发起的配置写操作，代码走镜像）当前 **11 个文件**，见
+  `scripts/diag/check-deploy-drift.py` 的常量 `DEPLOY_MANIFEST` ——
+  ★ **那是唯一一份拷贝**，漂移哨兵直接读它，别复制第二份。（旧 `deploy.sh` 已于 2026-10-05 删除。）
 - **只在 Windows 跑、不进 NAS 也不进容器**（LOCAL_ONLY）：`scan-secrets.py`、`check-deploy-drift.py`、
   `audit-found-*.py`、`check-indexer-timestamps.py`、`migrate-reseed-dirs.py`、`tests/`、`run-batch.sh`、`gen-*.py`。
 - 本地 `.env` 是**开发存根**（`TORZNAB_URLS` 就是 `.env.example` 里那两个占位符），
@@ -988,7 +989,7 @@ cross-seed 用**目录名**去站点搜索。若大包根下还有一层分类/�
 python scripts/reseed-state.py init --pack <包名> --root /volume1/video/download/...
 
 # ② ★★ 排进「哪几个包会被驱动」—— 唯一声明点，在 scripts/drive-loop.py 的 PACKS_DEFAULT
-#    改完要重新部署：deploy.sh 白名单里有 drive-loop.py（☆ 但它是容器里的脚本，见坑②）
+#    改完要重建镜像并部署（drive-loop.py 走镜像，不进受管集合 DEPLOY_MANIFEST；见坑②）
 
 # ③ 可选：给这个包设农场根（v3；不设则沿用全局）
 python scripts/reseed-state.py farm --pack <包名> --root /volume1/video/download/reseed/reseed_farm
@@ -1173,7 +1174,7 @@ python scripts/reseed-state.py farm --pack <包名> --root /volume1/video/downlo
    新 len=1 `(10+1)%1=0` → `frds` ⇒ **恰好没跳包**。★ 换一个落盘值就会跳。
 2. **临时去掉 `--pool`**：改 `scripts/drive-loop-resident.sh` 里那行 `--pool \`
    （★ **别改 `drive-loop.py` 的默认值** —— 那是产品决定）。
-   ★ 由**你**改、由**你**重启（`A.10`：`deploy.sh --apply` 与推 NAS **只能人做**）。
+   ★ 由**你**改、由**你**重启（`A.10`：SSH 直推配置与推 NAS **只能人做**）。
 3. **收集几批**，然后从 NAS 的 `notify/log/*.tsv` 按包聚合复核（**只读**）：
    ```bash
    # 在仓库根跑；走 UNC 只读，不改 NAS。★ 路径是你这台机器的真值
@@ -1282,7 +1283,7 @@ FRDS/MBF 行为完全不变）。
   **"一片一目录"**（`find -mindepth 2 -type d` = **131**，两边都对不上）。
   ★ 再查此数时**不许复用这两个已证伪的解释** —— 见 `ERR-AI-08`。
 
-**怎么用**。`deploy.sh` 只管容器文件，**不含** `scripts/`，所以先把它拷到 NAS 的
+**怎么用**。`build-farm.sh` 走受管集合（`DEPLOY_MANIFEST`）SSH 直推，**不随镜像**，所以先把它推到 NAS 的
 compose 目录（纯 LF，`sh` 可直接跑）：
 
 ```bash
@@ -1753,21 +1754,22 @@ reflink 只保护**新建**的链接。改动前已建的 **628 条仍是硬链�
 ## A.17 部署、漂移与凭据（真实值）
 
 > ★★ **本节是 2026-09-20 从 `README.md` 逐字节搬来的**（README 瘦身成门面）。正文一字未改。
-> ★ 本节讲的两件事**都在 Windows 侧跑**（`deploy.sh` / `check-deploy-drift.py` / `scan-secrets.py`），
-> 是「唯一从电脑发起的写操作」及其两道闸 ⇒ **别公开贴出**（含 NAS 路径与杂物计数）。
+> ★ 本节讲的两件事**都在 Windows 侧跑**（`check-deploy-drift.py` / `scan-secrets.py`），
+> 是「唯一从电脑发起的配置写操作」及其两道闸 ⇒ **别公开贴出**（含 NAS 路径与杂物计数）。
+> （旧 `deploy.sh` 已于 2026-10-05 删除，配置改走 SSH 直推。）
 
 ### A.17.1 漂移哨兵 —— NAS 和仓库到底一不一致
 
-`deploy.sh` 是**白名单式、单向**的：它保证**白名单里**那些文件两边逐字节一致，
-**白名单之外的一律不碰、也不报告**。于是有两个方向会悄悄长东西：
+受管集合（`DEPLOY_MANIFEST`）是**白名单式、单向**的：它保证**受管集合里**那些文件两边逐字节一致，
+**受管集合之外的一律不碰、也不报告**。于是有两个方向会悄悄长东西：
 
 | 方向 | 长出什么 | 后果 |
 |---|---|---|
 | **A（NAS 上冒出来的）** | 手工拷上去的脚本、忘了删的一次性补丁、调试产物 | **不在任何同步机制里** —— 既不会被更新也不会被发现，只会在某天以「NAS 上跑的行为和仓库里这份不一样」的形式咬人 |
-| **B（仓库里没登记的）** | 新写了脚本，忘了加进 `deploy.sh` 的 FILES | `git push` 把它带走了，但**它永远上不了 NAS**，而且没有任何东西会提醒你 |
+| **B（仓库里没登记的）** | 新写了脚本，忘了加进 `DEPLOY_MANIFEST` | `git push` 把它带走了，但**它永远上不了 NAS**，而且没有任何东西会提醒你 |
 
 两个方向都有前车之鉴：`build-farm.sh`、`fix-statedb-farm-root.py`、`nas-update-env.sh`
-三个文件都曾长期**靠手工拷**，2026-09-12 才逐个收进白名单。
+三个文件都曾长期**靠手工拷**，2026-09-12 才逐个收进受管集合。
 
 ```bash
 python scripts/diag/check-deploy-drift.py              # 两个方向都查（DST 取自 --dst / 环境变量 / scripts/.nasrc）
@@ -1778,13 +1780,13 @@ python scripts/diag/check-deploy-drift.py --no-nas     # 只查 B 方向（NAS �
 
 **退出码**：`0` 干净 · `1` 有需要人看一眼的 · `2` 环境问题（NAS 不可达 / `.env` 解析失败）。
 
-> ★ **受管集合是从 `deploy.sh` 的 FILES 数组解析出来的，没有第二份拷贝** ——
-> 复制一份就是又造一个漂移源。解析对不上（有 `::` 的行没解析出目的地）时**直接退出码 2**：
+> ★ **受管集合写在 `scripts/diag/check-deploy-drift.py` 的常量 `DEPLOY_MANIFEST` 里，没有第二份拷贝** ——
+> 复制一份就是又造一个漂移源。常量条数异常少（`< 5` 条）时**直接退出码 2**：
 > 受管集合一旦悄悄变空，所有文件都会被误报成「未知」，那种假警报会把真信号淹掉。
 
-**只有三种东西会出现在 NAS 上**：白名单里的（受管）、`KNOWN_NAS` 里逐条写明了理由的
+**只有三种东西会出现在 NAS 上**：受管集合里的（`DEPLOY_MANIFEST`）、`KNOWN_NAS` 里逐条写明了理由的
 （`.env`/`prowlarr/`/库/日志/缓存…）、以及**杂物**。第 4 种——没登记过的——才会报警，
-提示二选一：**收进白名单**，或**加进 `KNOWN_NAS` 并写清它凭什么在那儿**。
+提示二选一：**收进 `DEPLOY_MANIFEST`**，或**加进 `KNOWN_NAS` 并写清它凭什么在那儿**。
 
 > **杂物**（`.env.bak.*` / `.env_bak` 等任何 `.env` 备份变体、`build-farm.sh.bak.*`、
 > `notify/probe-artifacts-*/`、`__pycache__/`）
@@ -1978,21 +1980,20 @@ spool 积压: 0 条告警
    **邮件天天正常送达时它照样是 0 字节** —— 从它推断"邮件没配"必然出错
    （我这么错过一次，详见 SUMMARY §15）。那个文件里的密码还是**加密**存的
    （`eventpasscrypted`），所以「读 DSM 配置、自己发信」这条路也不存在。
-2. 把 NAS 侧脚本同步过去 —— **已在 `deploy.sh` 白名单里**，一条命令：
+2. 把 NAS 侧脚本同步过去 —— **已在受管集合（`DEPLOY_MANIFEST`）里**，用 SSH 直推（NAS 无 SFTP）：
    ```bash
-   DST=//YOUR-NAS/docker_ssd/reseed bash deploy.sh          # 先看 diff
-   DST=//YOUR-NAS/docker_ssd/reseed bash deploy.sh --apply   # 写入
+   # 逐文件推：ssh 'cat > <path>' < <localfile>（NAS SSHD 端口 36688）
+   ssh -p 36688 iSunker@192.168.0.7 'cat > /volume2/docker_ssd/reseed/build-farm.sh' < data/drive-loop/scripts/build-farm.sh
    ```
-   > ⚠ **别在批次运行中 `--apply`**（2026-09-12 踩过）：`sh` 是**边读边执行**脚本的，
-   > 覆盖正在跑的 `run.sh` 会让它执行到错位的代码 —— `deploy.sh` 现在改成**原子替换**
-   > （写 `.new` 再 `mv`，换 inode，老进程继续读旧内容），并会在**检测到心跳新鲜**时给出告警。
-   > 但它不会拦你：那批会继续用旧脚本跑完。详见 **SUMMARY §17.2**。
+   > ⚠ **别在批次运行中覆盖会被 `sh` 读取的文件**（2026-09-12 踩过）：`sh` 是**边读边执行**脚本的，
+   > 覆盖正在跑的 `run.sh` 会让它执行到错位的代码 —— 推送要**原子替换**
+   > （写 `.new` 再 `mv`，换 inode，老进程继续读旧内容），并在**检测到心跳新鲜**时先停手。
+   > ★ SSH 直推**不会拦你**：那批会继续用旧脚本跑完。详见 **SUMMARY §17.2**。
    >
-   > ⚠ 想拿临时目录演练（`DST=/tmp/x bash deploy.sh --apply`）之前请确认脚本是新的 ——
-   > 旧版本的 `DST=` 会被 `scripts/.nasrc` **静默覆盖**，演练会**打到生产**。已修（§17.4.1）。
-   > 现在规则是：**命令行 > `.nasrc`**。
+   > ⚠ 想拿临时目的地演练之前请确认目标路径是新的 ——
+   > 旧脚本里 `DST=` 曾被 `scripts/.nasrc` **静默覆盖**，演练会**打到生产**。已修（§17.4.1）。
    >
-   > ⚠ ⚠ **`deploy.sh` 末尾那句「下一步 `--force-recreate`」不是每次都适用**。
+   > ⚠ ⚠ **推完后「下一步 `--force-recreate`」不是每次都适用**。
    > 本轮同步的 4 个目的地里，只有 `<compose>/drive-loop/**` 那 3 个是**热路径** ——
    > 它们跑在 NAS 宿主机上（DSM 计划任务），**拷完即生效，下一次唤醒就用新的，不需要动容器**。
    > 第 4 个 `orchestrator/state.py` 是**构建上下文**副本：它进不了正在运行的容器，
@@ -2013,9 +2014,9 @@ spool 积压: 0 条告警
    #               ★ 这条 501 是**服务器回的**，说明连接和认证都成功了，只差发件人。
    #               留空也行（交给 ssmtp 用它自己配置里的默认发件人）。
    ```
-   ★ `notify.conf`（含你的收件人邮箱）**不在白名单里**，`deploy.sh` 永远动不到它 ——
-   和白名单"绝不覆盖生产独有内容"的原则一致（`.env` / `prowlarr/` 同理）。
-   （不想用 `deploy.sh` 就手工拷这两个文件。）
+   ★ `notify.conf`（含你的收件人邮箱）**不在受管集合里**，直推机制永远动不到它 ——
+   和"受管集合绝不覆盖生产独有内容"的原则一致（`.env` / `prowlarr/` 同理）。
+   （不想走直推就手工拷这两个文件。）
 3. **先验证，再挂任务**：
    ```bash
    sh notify-spool.sh --selftest     # 探测发信方式 / 配置 / 目录（**不判断**邮件配置对不对）
@@ -2057,7 +2058,7 @@ spool 积压: 0 条告警
    > docker compose --profile drive-loop up -d drive-loop autoheal
    > ```
    > ★ **启用命令是显式的 —— `docker compose up -d` 不会起它**（那两个服务带 `profiles: ["drive-loop"]`，
-   > 这是一把**防呆锁**：代码已就绪、`deploy.sh` 会推，但不会被谁顺手拉起来）。
+   > 这是一把**防呆锁**：代码已就绪（在镜像里）、配置已直推，但不会被谁顺手拉起来）。
    > ★ 详细取舍、接管机制（`healthcheck` + `autoheal`）、以及刻意与其余三个服务不同的两处，
    > 见 **`ENVIRONMENT.md` 的 `ERR-SCHED-*` 与 `SUMMARY §26.5`**（原「还没做」第 15 条，2026-09-19 改指）。
    > ⚠ **没停 DSM 任务就起容器 = 两条路同时跑**（容器入口自己有一道兜底闸门会退出码 3，
@@ -2507,9 +2508,10 @@ python scripts/reseed-state.py drive --pack dc-collection --indexers HDFans,Nany
 
 #### A.19.1.8 ⛔ 电脑端已不参与（2026-09-12 退役）
 
-**一句话**：跑批、发信、建农场全在 NAS 上；Windows 只剩 **`deploy.sh`**（把代码推上去）、
-**`check-deploy-drift.py`**（查两边一不一致）、**`scan-secrets.py`**（推之前扫一遍凭据）、
-**`audit-found-*.py`**（对账 `Found` 行：只读 NAS 的日志与库）四个用途。
+**一句话**：跑批、发信、建农场全在 NAS 上；Windows 只剩 **`check-deploy-drift.py`**（查两边一不一致）、
+**`scan-secrets.py`**（推之前扫一遍凭据）、
+**`audit-found-*.py`**（对账 `Found` 行：只读 NAS 的日志与库）三个用途
+（配置写操作也挪到 **SSH 直推**，不再是 Windows 侧脚本）。
 
 为什么单独写一节：代码里**到处**都有"Windows 也能跑"的痕迹（UNC 路径兜底、
 `tasklist` 判活、计划任务包装器、git-bash 路径转换的告警……），
@@ -2544,9 +2546,8 @@ schtasks /Delete /TN "reseed-drive-loop" /F
 
 **③ 明确保留的东西**
 
-- ✅ **`deploy.sh`** —— Windows Git Bash 跑的，**唯一**还从电脑发起的**写**操作。别删。
 - ✅ **`scripts/diag/check-deploy-drift.py`** —— Windows Git Bash 跑的，**只读**。它回答
-  「NAS 上有没有我不知道的文件 / 仓库里有没有该部署却没进白名单的文件」，见「漂移哨兵」一节。
+  「NAS 上有没有我不知道的文件 / 仓库里有没有该部署却没进受管集合的文件」，见「漂移哨兵」一节。
 - ✅ **`scripts/diag/scan-secrets.py`** —— Windows Git Bash 跑的，**只读**。`git push` 前跑一遍，
   按值的形状找漏进仓库的凭据。★ 它**读**本地 `.env` 但**只算 sha256、从不打印命中到的值**，
   所以输出可以直接贴给人看。见「推前凭据扫描」一节。**只扫不改，也不是调度的一部分。**
@@ -2557,11 +2558,11 @@ schtasks /Delete /TN "reseed-drive-loop" /F
   且会**稀释**其他包的轮换频率；而「注册了」≠「搜得到」（`mbf` 全绿却 `Found 0 torrents`）。
   ★ 所以它**只拟命令，人自己判**；文件头列了两条实测假阳性（音乐包 / 游戏包）。
   ★ 判据：**"读不到 NAS"必须报 `ERR`，不许报成"没有"**（阴性对照已验）。
-- ✅ **`scripts/nas-update-env.sh`** —— **2026-09-12 晚已进 `deploy.sh` 白名单**（映射到
-  `<compose>/nas-update-env.sh`），跟着 `deploy.sh --apply` 走，**不用再单独拷**。
+- ✅ **`scripts/nas-update-env.sh`** —— **2026-09-12 晚已进受管集合（`DEPLOY_MANIFEST`）**（映射到
+  `<compose>/nas-update-env.sh`），跟着 SSH 直推走，**不用再单独拷**。
   它是**生成物**（`scripts/diag/gen-nas-env-update.py` 产出，故本地被 gitignore）——
-  之所以能进白名单，是因为它只装载 `DATA_DIRS` + `LINK_DIR` 两个**路径**键、不含任何凭据。
-  ⚠ 若哪天它开始携带别的键，**先回看 `deploy.sh` 里那段注释**再同步。
+  之所以能进受管集合，是因为它只装载 `DATA_DIRS` + `LINK_DIR` 两个**路径**键、不含任何凭据。
+  ⚠ 若哪天它开始携带别的键，**先回看 `DEPLOY_MANIFEST` 里那条注释**再同步。
 
 #### A.19.1.9 ⚠ 交接必读的坑
 
@@ -2844,14 +2845,16 @@ searchee 数与切换前**一致（1888）**。
   旁边生出 `__pycache__/*.cpython-38.pyc` ⇒ 版本由此**坐实**（不是猜的）。
 - **边界**：**这台 NAS 上成立**。别把它当成"python 3.8 通用问题" —— 关键前提是"跑在 NAS 宿主机、用 DSM 的解释器"。
 
-### ERR-DSM-09 DSM 的 SSH 默认关闭 ⇒ **没有远程 shell**
-- **症状**：任何"SSH 上去跑一下"的方案直接作废。
+### ERR-DSM-09 DSM 的 SSH **22** 默认关闭 ⇒ 但**已改从 36688 开门**
+- **症状**：早期任何"SSH 上去跑一下"的方案直接作废。
 - **环境前提**：`22` 端口拒绝连接。
 - **根因**：DSM 默认不开 SSH（安全设置）。
 - **触发条件**：任何"你 ssh 上 NAS 执行 X"的思路。
-- **规避做法**：**只读走 SMB / HTTP 端口；写操作给命令让人在 DSM 里执行**（或用 `deploy.sh`）。
-- **怎么发现的**：SUMMARY §9、README `docker-compose.yml` 注释。
-- **边界**：**本机设置**。★ 这条是整个协作模式的**前提** —— 见 `A.2` 的 ★。
+- **规避做法**：★ **2026-10 起 NAS 侧已开 SSH 端口 `36688`**（22 仍关）——可直接
+  `ssh -p 36688 iSunker@192.168.0.7` 执行、`ssh 'cat > <path>'` 推文件（**仍无 SFTP，不能 `scp`**）。
+  只读也可走 SMB / HTTP 端口；写操作仍可给命令让人在 DSM 里执行。旧 `deploy.sh` 已删。
+- **怎么发现的**：SUMMARY §9、README `docker-compose.yml` 注释；36688 见 `summary/32`。
+- **边界**：**本机设置**。★ 早期这条是整个协作模式的前提，现已被 36688 取代。
 
 **◆ 本小节未实例 / 未验证**：`/usr/syno/bin` 下哪些是 setuid、哪些依赖 i18n 资源（本项目未碰）。
 
@@ -2877,13 +2880,13 @@ searchee 数与切换前**一致（1888）**。
 > 依据：规避做法已落地为**原子替换**（写 `.new` 再 `mv`，**换 inode**，老进程继续读旧内容）；
 > 但**纪律仍在**：别在批次运行中 `--apply`（原子替换不拦你，只是不再错位）。
 - **症状**：`attempts.log` 里出现 `exit=127 (no python: /usr/bin/python3)`，**但同一批的 python 明明跑完了**。
-- **环境前提**：`deploy.sh` 会覆盖 NAS 上**正在被 `sh` 读取**的 `run.sh`。
+- **环境前提**：旧的 `deploy.sh`（**已删除**）会覆盖 NAS 上**正在被 `sh` 读取**的 `run.sh`。
 - **根因**：`sh` **不把整个脚本读进内存**，而是从文件描述符**按偏移继续读**。
   文件被覆盖（同 inode，内容变了）后，它会**从旧偏移读到新文件的字节** ⇒ 执行到一半的、错位的代码。
-- **触发条件**：批次运行期间 `deploy.sh --apply`。
-- **规避做法**：`deploy.sh` 已改成**原子替换**（写 `.new` 再 `mv`，**换 inode**，老进程继续读旧内容），
+- **触发条件**：批次运行期间 `deploy.sh --apply`（已不存在；现改 SSH 直推，同样**别在批次运行中覆盖**）。
+- **规避做法**：`deploy.sh` 当时改成**原子替换**（写 `.new` 再 `mv`，**换 inode**，老进程继续读旧内容），
   并在检测到心跳新鲜时给出告警。**但它不会拦你** —— 那批会继续用旧脚本跑完。
-  ⇒ 纪律：**别在批次运行中 `--apply`**；真要动就挑批次间隙（看 `.drive-loop.state` 的 `running_pid`）。
+  ⇒ 纪律：**别在批次运行中覆盖会被 `sh` 读的文件**；真要动就挑批次间隙（看 `.drive-loop.state` 的 `running_pid`）。
 - **怎么发现的**：踩到后定位；README「常见问题」的「假的 `exit=127`」条、SUMMARY §17.2。
 - **边界**：**只对"边读边执行"的解释器 + 覆盖式更新**成立；`mv`（换 inode）就不会有这个问题 ——
   **这就是修法的依据**。弯路 #12（当初的形态：直接覆盖 `run.sh` ⇒ `exit=127`）。
@@ -2911,7 +2914,7 @@ searchee 数与切换前**一致（1888）**。
 
 ### ERR-SH-04 ★ `source` 会**覆盖环境变量** ⇒ `DST=/tmp/x bash deploy.sh` 打到了**生产**
 - **症状**：想拿临时目录演练，**实际写进了生产 NAS**。
-- **环境前提**：`deploy.sh` 会 `source scripts/.nasrc` 来提供默认值。
+- **环境前提**：旧 `deploy.sh`（**已删除**）会 `source scripts/.nasrc` 来提供默认值。
 - **根因**：`.nasrc` **在**命令行赋值**之后**被 source ⇒ 它把 `DST` 覆盖回去了。
 - **触发条件**：任何"用环境变量临时覆盖某个默认值"的写法（`X=… cmd`）。
 - **规避做法**：**先把外部给的值存下来，`source` 完再恢复**：
@@ -2952,7 +2955,7 @@ searchee 数与切换前**一致（1888）**。
 - **环境前提**：要更新一个**可能正在被读**的文件。
 - **根因**：`cp` 保持 inode（原地改内容）；`mv` 换 inode（改名/换目录项）。
 - **触发条件**：更新长跑进程正在读的脚本 / 库 / 证书。
-- **规避做法**：**一律原子替换**（写 `.new` + `mv`），这是本项目 `deploy.sh` 的既定做法。
+- **规避做法**：**一律原子替换**（写 `.new` + `mv`），这是本项目配置直推（原 `deploy.sh`）的既定做法。
 - **怎么发现的**：由 `ERR-SH-01` 反推出来的规矩。
 - **边界**：通用。★ **`mv 文件 /dev/null`** 那条（不是丢弃）**本项目没有实例**，此处不展开。
 
@@ -3146,7 +3149,7 @@ searchee 数与切换前**一致（1888）**。
 - **环境前提**：UNC 的 `mv` 要跨网络。
 - **根因**：同文件系统内的 `mv` 是改目录项（原子、瞬时）；跨主机/跨协议的 `mv` 往往是 **copy + delete**。
 - **触发条件**：对 UNC 做大目录 `mv`。
-- **规避做法**：要原子的目录级搬移，**在 NAS 侧做**（`deploy.sh` 的 `.new` + `mv` 就是在 NAS 侧）。
+- **规避做法**：要原子的目录级搬移，**在 NAS 侧做**（原 `deploy.sh` 的 `.new` + `mv` 就是在 NAS 侧）。
 - **怎么发现的**：搬家（`migrate-reseed-dirs.py`）时的设计与踩坑。
 - **边界**：只在跨协议时成立。
 
@@ -3252,7 +3255,7 @@ searchee 数与切换前**一致（1888）**。
 - **症状**：改完 `orchestrator/state.py`，`--force-recreate` 之后**行为没变**。
 - **环境前提**：`reseed-orchestrator` 是**一次性 CLI**（`ENTRYPOINT python -m orchestrator.main`，**无 daemon**）。
 - **根因**：不带 `--build` 的 `--force-recreate` 只会拿**旧镜像**重启 ⇒ 白掀一次容器。
-- **触发条件**：照 `deploy.sh` 末尾那句"下一步 `--force-recreate`"无脑跑。
+- **触发条件**：照旧 `deploy.sh` 末尾那句"下一步 `--force-recreate`"无脑跑（该脚本已删，但同类误区仍在）。
 - **规避做法**：**要 `docker compose build reseed-orchestrator`**。
 - **怎么发现的**：README「NAS 侧一次性配置」专门标了「**`deploy.sh` 末尾那句不是每次都适用**」。
 - **边界**：★ **只对一次性 CLI 成立**。
@@ -4146,7 +4149,7 @@ searchee 数与切换前**一致（1888）**。
   key 摆在**命令行**上（进程表 / shell 历史 / 聊天粘贴都漏），而返回的裸 JSON 里只有
   `indexerId`、**要靠人肉对到站名**。脚本从生产 `.env` 读 key（**绝不打印**）、
   只打白名单字段、站名只从 `cross-seed.db` 取 `id`/`name` 两列。
-  两个脚本都在 `deploy.sh` 的白名单**之外**（Windows 侧手动诊断用）。
+  两个脚本都在受管集合（`DEPLOY_MANIFEST`）**之外**（Windows 侧手动诊断用）。
   ★ **两个时钟不一致时以更长的为准**：`disabledTill` 管 Prowlarr 何时肯转发，
   `retry_after` 管 cross-seed 何时肯再问 —— **后者更长就由后者决定恢复时刻**。
   ★★ **2026-09-17 实测：它按的是自己那个时钟，不是"Prowlarr 放行了就走"。**
@@ -4502,7 +4505,7 @@ searchee 数与切换前**一致（1888）**。
   `check-deploy-drift.py` 的 `KNOWN_NAS`（**分类**口径）。分类那处配了回归 `tests/test_drift_junk.py`。
   ★ **弯路 #5 是同一个病根的另一面**：`build-farm.sh` 等运维脚本早期**只在 NAS 上手工存在**，
   版本库里没有 ⇒ 两端漂移，谁也说不清跑的是哪一版。修法就是本文件所在的这套东西：
-  **白名单（`deploy.sh` 的 28 条）+ 漂移哨兵（`check-deploy-drift.py`）**。
+  **受管集合（`DEPLOY_MANIFEST`，11 条）+ 漂移哨兵（`check-deploy-drift.py`）**。
   ⇒ 一般化的判据：**凡是"只在某一端存在"的东西，都迟早会漂移** —— 除非有个能自动回读的对照点。
 
 ### ERR-GIT-02 `git ls-files` 与 `git log --name-only --full-history` 的覆盖面差异
@@ -4934,8 +4937,8 @@ searchee 数与切换前**一致（1888）**。
 > 不是"代码在某个分支上写错了"。
 
 ### ERR-HW-02 NAS 的 SSH 端口默认关闭 ⇒ **没有远程 shell 时的替代通道**
-> 交叉引用：本体登记在 `ERR-DSM-09`。**替代通道清单**：
-> 只读 → SMB（UNC）/ HTTP 端口；写 → `deploy.sh`（白名单）/ 给用户一条命令在 DSM 里执行。
+> 交叉引用：本体登记在 `ERR-DSM-09`。**替代通道清单**（★ 2026-10 起 SSH 已在 36688 开门）：
+> 只读 → SMB（UNC）/ HTTP 端口 / `ssh -p 36688`；写 → SSH 直推（`ssh 'cat > <path>'`）/ 给用户一条命令在 DSM 里执行。
 
 ### ERR-HW-03 共享文件夹与 SMB 视图的差异（`/volume1/docker` **是**共享文件夹，但**不在枚举里**）
 > 交叉引用：本体登记在 `ERR-DSM-03` / `A.3`。
@@ -5432,7 +5435,7 @@ searchee 数与切换前**一致（1888）**。
 | `SUMMARY.md` | 卷归属表（§9）、占位符约定（§0）、拓扑（§2）、各处根因（按 §N 交叉引用）|
 | `走过的弯路.md` | 20 项技术弯路的归因 —— ★ **已全部并入本文**（2026-09-13，原文件已删）。见下方说明 |
 | `tests/README.md` | 测试层踩过的坑 + 行形陷阱（`ERR-AI-04`）|
-| `.env.example` / `docker-compose.yml` / `deploy.sh` | 配置键、服务与网络、白名单与三处路径 |
+| `.env.example` / `docker-compose.yml` / 旧 `deploy.sh`（已删）| 配置键、服务与网络、受管集合与三处路径 |
 | 会话记忆（`nas-commands-cost-first` 等）| `ERR-CMD-02` / `ERR-CMD-03` 两条最新教训 |
 
 > ★ **维护方式**：新踩一个坑 → 在 B 部分对应层加一条 `ERR-XX-nn`（填满七格）；

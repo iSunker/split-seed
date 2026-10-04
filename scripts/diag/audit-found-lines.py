@@ -10,7 +10,7 @@ b = 生产代码 `orchestrator.state._RE_FOUND` 命中行数
 -----------------------------------
 判据本体原先写在本文件里 —— 而 `drive-loop.py`（跑在 **NAS 宿主机**上）也要
 跑同一条判据，本文件却**不在 NAS 上**（`check-deploy-drift.py` 的 LOCAL_ONLY：
-"在 Windows 上跑"；`deploy.sh` 的 FILES 里没有它），而且写死的
+"在 Windows 上跑"；`DEPLOY_MANIFEST` 里没有它），而且写死的
 `//iSunker-DS423/...` 在 NAS 上不存在。
 
 于是判据搬进 `orchestrator/state.py` —— 它被部署**两次**（构建上下文 +

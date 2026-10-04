@@ -92,7 +92,7 @@ if [ ! -x "$PY" ]; then
   exit 127
 fi
 if [ ! -f "$SCRIPT" ]; then
-  echo "[!!] 找不到 $SCRIPT —— deploy.sh 同步过了吗？" >&2
+  echo "[!!] 找不到 $SCRIPT —— 镜像/挂载里的代码没同步好吗？" >&2
   echo "[$(date '+%F %T')] exit=127 (no script: $SCRIPT)" >> "$ATTEMPTS"
   exit 127
 fi

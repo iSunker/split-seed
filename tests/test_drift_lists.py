@@ -45,8 +45,8 @@
    ★ 这一条是**把本会话踩的坑钉住**：我去 grep `q.py` 怎么上 NAS 时，
      仓库里**一处**都没写，只看到它 docstring 里的 `docker exec`；照那条路走会撞
      `No such file` —— 因为**真正的落点是 `cat > q.py` 粘到 compose 根**。
-4. **`deploy.sh` 的 `FILES` 与 `LOCAL_ONLY` 不相交** —— 同一个文件不许两边都在
-   （哨兵 B 方向按"先查 FILES 再查 LOCAL_ONLY"判，两边都在 = 它会静默取前者，
+4. **受管集合（`DEPLOY_MANIFEST`）与 `LOCAL_ONLY` 不相交** —— 同一个文件不许两边都在
+   （哨兵 B 方向按"先查受管集合再查 LOCAL_ONLY"判，两边都在 = 它会静默取前者，
      而人看清单会以为它"不部署" ⇒ **两处声明打架**）。
 
 ★ 行形只用 `  ok  ` / ` FAIL `（`tests/README.md` 那个重数器只认这三种）。
@@ -71,9 +71,9 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-DEPLOY = REPO / "deploy.sh"
+# ★ 2026-10-05：受管集合不再是「解析 deploy.sh 的 FILES」—— `deploy.sh` 已删除，
+#   登记搬进哨兵内的常量 `DEPLOY_MANIFEST`。本测试直接读那个常量（经下面载入的 `M`）。
 DRIFT_SRC = REPO / "scripts" / "diag" / "check-deploy-drift.py"
-
 _ok = 0
 _n = 0
 
@@ -98,21 +98,20 @@ sys.modules[_name] = M
 _spec.loader.exec_module(M)
 
 # --------------------------------------------------------------------------- #
-print("== ① ★★ 每个已跟踪文件都必须被**明确表态**过（FILES 或 LOCAL_ONLY）==")
+print("== ① ★★ 每个已跟踪文件都必须被**明确表态**过（DEPLOY_MANIFEST 或 LOCAL_ONLY）==")
 
 # ★ 前提：两边至少有一个非空，否则下面那条 `all(...)` 会**空集通过**
 #   （"没有文件"也能让"所有文件都登记了"成立 —— `ERR-AI-03` 的形状）。
-check("前提：deploy.sh 里解析出了 FILES 条目", len(M.parse_deploy_files(
-    DEPLOY.read_text(encoding="utf-8"))[0] or []) > 0,
-    "解析不出 FILES ⇒ 下面 ① 的『都登记了』什么也证明不了")
+check("前提：哨兵内置了非空的 DEPLOY_MANIFEST",
+      len(getattr(M, "DEPLOY_MANIFEST", []) or []) > 0,
+      "DEPLOY_MANIFEST 空 ⇒ 下面 ① 的『都登记了』什么也证明不了")
 check("前提：LOCAL_ONLY 非空", len(M.LOCAL_ONLY) > 0, "清单空 ⇒ 同上是空集通过")
 
-_fs_entries, _fs_unparsed, _fs_err = M.parse_deploy_files(
-    DEPLOY.read_text(encoding="utf-8"))
-# 部署的**源路径**（`"本地路径::目标路径"` 的左半边）
-_DEPLOYED = {e[0] if isinstance(e, (list, tuple)) else e for e in (_fs_entries or [])}
-_DEPLOYED = {s.split("::")[0].strip() for s in _DEPLOYED if isinstance(s, str)}
-check("前提：FILES 里解析出了源路径", len(_DEPLOYED) > 0, repr(sorted(_DEPLOYED))[:200])
+# ★★ 2026-10-05：`deploy.sh` 已删除 ⇒ 受管集合不再解析自它，而是哨兵内的常量
+#   `DEPLOY_MANIFEST`：每条是 `(本地相对路径, 生产相对路径)` 二元组。
+#   下面是「会部署的**源路径**」（左半边）。
+_DEPLOYED = {s for s, _d in M.DEPLOY_MANIFEST}
+check("前提：DEPLOY_MANIFEST 里有源路径", len(_DEPLOYED) > 0, repr(sorted(_DEPLOYED))[:200])
 
 _local_rx = [rx for rx, _why in M.LOCAL_ONLY]
 # ★★ 2026-10-05（B3）：第三条路 —— **走镜像**（IMAGE_ONLY）。哨兵 B 方向已加这一类
@@ -169,9 +168,9 @@ for rel in _tracked_files:
         continue
     _undeclared.append(rel)
 
-check("★★ 所有已跟踪的 .py/.sh 都被表态过（FILES 或 LOCAL_ONLY）",
+check("★★ 所有已跟踪的 .py/.sh 都被表态过（DEPLOY_MANIFEST 或 LOCAL_ONLY）",
       not _undeclared,
-      "未表态 %d 个：%s\n        ← 处置二选一：①会部署就加进 deploy.sh 的 FILES；"
+      "未表态 %d 个：%s\n        ← 处置二选一：①会部署就加进哨兵的 DEPLOY_MANIFEST；"
       "②不部署就加进 LOCAL_ONLY（**写明理由**）"
       % (len(_undeclared), ", ".join(sorted(_undeclared)[:20])))
 
@@ -240,12 +239,12 @@ for _rx, _need in ((r"^q\.py$", "compose"),
           "然后撞 `No such file`（本会话实测）" % (_why,))
 
 # --------------------------------------------------------------------------- #
-print("\n== ④ ★ FILES 与 LOCAL_ONLY **不许相交**（两处声明打架）==")
-#   哨兵 B 方向是"先查 FILES 再查 LOCAL_ONLY"⇒ 两边都在时它会**静默取前者**，
+print("\n== ④ ★ 受管集合与 LOCAL_ONLY **不许相交**（两处声明打架）==")
+#   哨兵 B 方向是"先查受管集合再查 LOCAL_ONLY"⇒ 两边都在时它会**静默取前者**，
 #   而人读清单会以为这个文件"不部署" ⇒ **两处口径不一致**，正是本仓最忌的形状。
 _overlap = sorted(f for f in _DEPLOYED
                   if any(re.search(rx, f) for rx in _local_rx))
-check("★ 没有文件同时出现在 FILES 和 LOCAL_ONLY", not _overlap, repr(_overlap))
+check("★ 没有文件同时出现在受管集合和 LOCAL_ONLY", not _overlap, repr(_overlap))
 
 # --------------------------------------------------------------------------- #
 print("\n== ⑤ ★★ 本文件自己也得在 `COUNTS.json` 里（它是今天第 N 个 q2.py 的候选）==")

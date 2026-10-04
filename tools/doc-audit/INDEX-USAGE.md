@@ -167,7 +167,8 @@
 
 ★ **`05` 自己栽过一次假警报，记下来**：第一版只按"仓库里有没有这个文件名"判 ⇒
 `run-resident.sh` 被引 3 次、仓库里找不到 ⇒ 报 3 条 `NO-FILE`。而它**是**合法的 ——
-`deploy.sh` 把 `scripts/drive-loop-resident.sh` 部署成 **`drive-loop/run-resident.sh`**（**改了名**）。
+`deploy.sh`（现由 `DEPLOY_MANIFEST` 承担）曾把 `scripts/drive-loop-resident.sh` 部署成
+**`drive-loop/run-resident.sh`**（**改了名**）。
 ⇒ 补 `DEPLOY_ALIASES` 两跳解析（先按名找，找不到再按 NAS 部署名反查）。
 ★ **教训**：这族的判据**不能只看"仓库里有没有"** —— 同 `B.10` 第 1 条
 （「某台机器上没有」≠「环境里都没有」），方向反过来也一样。

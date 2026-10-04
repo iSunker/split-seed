@@ -2061,12 +2061,12 @@ def _resolve_searchee_to_pack(
 # 生产里要跑它们的是 `drive-loop.py`，而它跑在 **NAS 宿主机**上
 # （`drive-loop-nas.sh`: `PY=/usr/bin/python3`，DSM 自带 3.8.15，**不是容器**）。
 # 而那两个脚本在 `check-deploy-drift.py` 的 **LOCAL_ONLY** 里（注明"在 Windows
-# 上跑"），`deploy.sh` 的 FILES 里根本没有它们 —— 也就是说 **NAS 上没有这两个
+# 上跑"），`DEPLOY_MANIFEST`（受管集合）里根本没有它们 —— 也就是说 **NAS 上没有这两个
 # 文件**；就算手工拷上去，它们写死的 `//iSunker-DS423/...` UNC 路径在 NAS
 # 宿主机上也不存在（那边是 `/volume1/...`）。
 #
 # 本模块被部署**两次**（`orchestrator/state.py` 进构建上下文、`drive-loop/
-# orchestrator/state.py` 进运行时 —— 见 deploy.sh FILES 里两处注释），
+# orchestrator/state.py` 进运行时 —— 见 DEPLOY_MANIFEST 里两处注释），
 # 是两侧**唯一都能到达**的地方。于是判据放这边，两个脚本降级成薄壳：
 # 手工随时能跑，但核的是**同一份实现**。
 #

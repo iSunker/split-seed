@@ -38,15 +38,16 @@
   · 本脚本答「**有哪些站、id 是几**」（全量）；
   · 那个答「**哪个站被本地禁了**」（只列有状态的）。
 
-★ **本脚本不进 `deploy.sh` 白名单**（2026-09-17 拍板，**别再顺手加**）：
-  白名单现有 **28 条全是「NAS 自己要执行」的**文件 —— `drive-loop/**`（DSM 任务计划跑）、
-  `notify/**`（cron 跑）、`orchestrator/**`（容器 `COPY` 进镜像）、
-  `build-farm.sh` / `rm-staging.sh`（NAS 手工运维跑）。
+★ **本脚本不进受管集合（`DEPLOY_MANIFEST`）**（2026-09-17 拍板，**别再顺手加**）：
+  受管集合现有 **11 条**（旧 `deploy.sh` 白名单 28 条，随代码入镜像大幅缩减）——
+  都是「NAS 要执行/要读」的**配置与运维脚本**（`compose.yaml`、`cross-seed/`、`hlink/`、
+  `build-farm.sh`、`rm-staging.sh`、`fix-statedb-farm-root.py`、`nas-update-env.sh`、
+  `.dockerignore`、`scripts/diag/watch-containers*.sh`）。
   而本脚本与它同族的四个（`prowlarr-indexerstatus.py` / `torznab-keycheck.py` /
   `check-indexer-timestamps.py` / `check-deploy-drift.py`）是 **Windows 侧只读探针**：
   **从本机读 UNC 上的 .env**，再打本机到 Prowlarr 的 HTTP。
   ⇒ **NAS 上没有、也不该有调用者**。加进去只会同步一个没人跑、还要维护两边一致的副本。
-  ★ 本条正确性不靠白名单 —— 靠 **git**（它是被跟踪的源码）。
+  ★ 本条正确性不靠受管集合 —— 靠 **git**（它是被跟踪的源码）。
 
 ★ **它不打站点**（2026-09-17 用户问到，记清楚）：
   只发一个 `GET http://<NAS>:9696/api/v1/indexer`，Prowlarr 用**本地库**回答
