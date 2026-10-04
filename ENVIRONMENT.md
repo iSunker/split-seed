@@ -80,7 +80,7 @@ grep -n '弯路 #' ENVIRONMENT.md
 | NAS 局域网 IP | **`192.168.0.7`**（`.env.example` 里是 `192.168.1.10` 占位符，别照抄）|
 | NAS 侧 shell | ★ **没有** —— SSH(22) 关闭。只读走 SMB，写走 `deploy.sh` 或用户在 DSM 里执行 |
 | 开发机 | Windows 11 Pro，MINGW64 / Git Bash，控制台代码页 **GBK** |
-| 工作目录 | `D:\Projects\dabaochaibaozuozhongxiangmu\reseed-toolkit` |
+| 工作目录 | `D:\Projects\reseed` |
 | 临时目录 | `C:\Users\艾森克\.claude\jobs\<job>\tmp`（后台任务）／`D:\tmp`（人工诊断）|
 
 ### 端口与容器

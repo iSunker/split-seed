@@ -51,6 +51,25 @@
 #   SUDO         root 提权前缀（默认 sudo；已经是 root 就设 SUDO=）
 #   （期望集本身不在这里配 —— 它在 .env 的 FARM_SOURCES / DATA_DIRS，见上一节）
 #
+# ★★ 2026-10-05：镜像深度跟随源（嵌套单片）
+# ------------------------------------------------------------
+# 起因：大包里"嵌套的单片"（如 DC/01.绿箭侠…/Arrow.S01-S08…/Arrow.S01.Bluray…）
+#   只能靠**深镜像**进农场；但旧脚本只镜像每个源的**一层直接子项**，于是那些
+#   嵌套单片要么进不了农场、要么被下次 `--apply --prune` 当孤儿删掉。
+# 方案：`FARM_SOURCES` 里的源仍按**一层**镜像（= 今天的 `"$dd"/*`，行为零变化），
+#   另立 **`FARM_DEEP_SOURCES`** 列出"需要递归镜像"的源，递归到 **`FARM_DEPTH`** 层。
+#   两键都在 .env 里（逗号分隔，NAS 路径视角，格式同 FARM_SOURCES / DATA_DIRS）：
+#       FARM_DEEP_SOURCES=/volume1/video/download/DC/01.绿箭侠,/volume1/.../TV/某合集
+#       FARM_DEPTH=2
+#   · `FARM_DEEP_SOURCES` 留空 = 无深源 ⇒ 与旧行为**逐字节一致**（代码先上、行为惰性）。
+#   · 深度语义：从深源的**直接子项**往下算，对应 cross-seed 的 maxDataDepth，
+#     须与 `reseed-state.py init --depth N` / `pack.max_depth` **对齐**（否则农场有
+#     条目、库解析不到）。
+#   · 判定键由「basename」升级为「农场**相对路径**」：深度 1 时二者**逐字相同**
+#     ⇒ 扁平源零变化、旧清单天然兼容（NAMES_TMP 每轮重算，从不读旧文件）。
+#   · 同一个源同时出现在两键 ⇒ 取更深值并**告警**（不静默）。
+#   · `FARM_DEEP_SOURCES` 也走自指闸（含 $FARM 即 die）。
+#
 # 在哪里跑：NAS 本机 **或** Windows —— 两边都行
 # ---------------------------------------------
 # 原先以为"SMB/Windows 建不了硬链接"，**实测是错的**（2026-09-11，详见 §10.5.7）：
@@ -147,6 +166,16 @@ cd "$COMPOSE_DIR" 2>/dev/null || die "目录不存在: $COMPOSE_DIR"
 #     出事的只会是 shell —— 所以 shell 里每条 `.env` 取值都该过一遍 tr。
 DATA_DIRS=$(sed -n 's/^[[:space:]]*DATA_DIRS[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
 FARM_SOURCES=$(sed -n 's/^[[:space:]]*FARM_SOURCES[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
+# ★ 2026-10-05：深镜像源（见文件头「镜像深度跟随源」）。同样必须 tr -d '\r'（.env 是 CRLF）。
+FARM_DEEP_SOURCES=$(sed -n 's/^[[:space:]]*FARM_DEEP_SOURCES[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
+FARM_DEPTH=$(sed -n 's/^[[:space:]]*FARM_DEPTH[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
+# 默认 2：与 reseed-state.py init --depth 的默认值对齐（见文件头）。
+FARM_DEPTH="${FARM_DEPTH:-2}"
+# 非正整数 ⇒ 回退 2（.env 里手滑写空/写错不能让整个巡检挂掉）。
+case "$FARM_DEPTH" in
+  ''|*[!0-9]*) FARM_DEPTH=2 ;;
+  0)           FARM_DEPTH=2 ;;
+esac
 
 SRC_LIST="$FARM_SOURCES"; SRC_FROM="FARM_SOURCES"
 if [ -z "$FARM_SOURCES" ]; then
@@ -154,6 +183,22 @@ if [ -z "$FARM_SOURCES" ]; then
 fi
 [ -n "$SRC_LIST" ] || die "$COMPOSE_DIR/.env 里既读不到 FARM_SOURCES 也读不到 DATA_DIRS"
 say "期望集来自   : $SRC_FROM"
+if [ -n "$FARM_DEEP_SOURCES" ]; then
+  say "深镜像源     : $FARM_DEEP_SOURCES   （深度 $FARM_DEPTH）"
+fi
+
+# ★ 同一个源同时出现在 FARM_SOURCES 与 FARM_DEEP_SOURCES ⇒ 取更深值 + 告警（不静默）。
+#   比对用**未 map 的原值**（两键都是 NAS 视角写的，map 只影响本机访问）。
+if [ -n "$FARM_DEEP_SOURCES" ] && [ -n "$FARM_SOURCES" ]; then
+  set -f; _oIFS=$IFS; IFS=,
+  for _d in $FARM_DEEP_SOURCES; do
+    [ -n "$_d" ] || continue
+    case ",$FARM_SOURCES," in
+      *",$_d,"*) say "  [!!] 告警：$_d 同时在 FARM_SOURCES 与 FARM_DEEP_SOURCES —— 按深源($FARM_DEPTH)处理" ;;
+    esac
+  done
+  IFS=$_oIFS; set +f
+fi
 
 # ★ 自指闸：源里出现农场自己（或农场内的路径）= 清单还没跟农场拆开。
 #   这是**必须硬停**的两种情况，而且都不报错、只静默变正确：
@@ -164,13 +209,17 @@ set -f
 OLDIFS0=$IFS; IFS=,
 FARM_M=$(map_path "$FARM")
 N_SELF=0
-for dd in $SRC_LIST; do
-  [ -n "$dd" ] || continue
-  set +f
-  case "$(map_path "$dd")" in
-    "$FARM_M"|"$FARM_M"/*) N_SELF=$((N_SELF + 1)) ;;
-  esac
-  set -f
+# ★ 2026-10-05：深源也要走自指闸 —— 两键各遍历一趟（**不要**把它们拼成一个词，
+#   `a,b,c` 这种拼接在 POSIX sh 里对 IFS 拆分的时机很反直觉、易漏判）。
+for _gate in "$SRC_LIST" "$FARM_DEEP_SOURCES"; do
+  for dd in $_gate; do
+    [ -n "$dd" ] || continue
+    set +f
+    case "$(map_path "$dd")" in
+      "$FARM_M"|"$FARM_M"/*) N_SELF=$((N_SELF + 1)) ;;
+    esac
+    set -f
+  done
 done
 IFS=$OLDIFS0; set +f
 if [ "$N_SELF" -gt 0 ]; then
@@ -200,7 +249,7 @@ fi
 #     > `$DRIVE_STATE_DIR/hlink`（容器里 = /state/hlink）。
 #   判据是 **"能不能写"**，不是"存不存在" —— 因为只读挂载下目录存在但写不进去。
 _pick_manifest_dir() {
-  for _c in "$FARM_MANIFEST_DIR" "$COMPOSE_DIR/hlink" "$COMPOSE_DIR/data/hlink" \
+  for _c in "${FARM_MANIFEST_DIR:-}" "$COMPOSE_DIR/hlink" "$COMPOSE_DIR/data/hlink" \
             "${DRIVE_STATE_DIR:+$DRIVE_STATE_DIR/hlink}"; do
     [ -n "$_c" ] || continue
     # 已存在则直接测可写；不存在则试着建（建得起来即可写）
@@ -266,19 +315,28 @@ say "  清单       : $MANIFEST"
 say "  模式       : $( [ "$VERIFY_ONLY" = 1 ] && echo '仅校验' || { [ "$DRY" = 1 ] && echo 'DRY-RUN（不建）' || echo 'APPLY'; } )$([ "$PRUNE" = 1 ] && echo ' + prune')"
 say "========================================================="
 
-# ---------- 2) 逐 dataDir、逐直接子项处理 ----------
+# ---------- 2) 逐 dataDir、逐子项处理（枚举登记 / 创建 两相） ----------
 # set -f：关掉通配符展开。DC 的路径里有全角括号和点，虽然不含 * 或 ?，
 # 但把 DATA_DIRS 按逗号拆开时让 shell 别去 glob 更稳妥。
 set -f
 OLDIFS=$IFS
 IFS=,
 N_NEW=0; N_HAVE=0; N_MISS=0; N_SRC=0; N_SKIP_DEV=0
-# 本次的「期望集」：名字列表（给 prune 做精确比对）+ 名字→源（给人看）
+# 本次的「期望集」：**农场相对路径**列表（给 prune 做精确比对）+ 相对路径→源（给人看）
+# ★ 2026-10-05：键从 basename 升级为「农场相对路径」。深度 1 时二者逐字相同。
 NAMES_TMP="$MANIFEST.names.tmp"
-# 仅 --verify 用：期望集里有、农场里没有的（名字→源），供明细行打印
+# 仅 --verify 用：期望集里有、农场里没有的（相对路径→源），供明细行打印
 MISSING_TMP="$MANIFEST.missing.tmp"
+# 每个源枚举出的相对路径落这里，再 `while read < 文件` 消费。
+# ★ 绝不 pipe 进 while —— 那是子 shell，N_SRC/N_NEW 等计数器会丢。
+ENUM_I="$MANIFEST.enum.i.tmp"
+PRUNE_I="$MANIFEST.prune.i.tmp"
+SEEN_I="$MANIFEST.seen.i.tmp"
+COVER_TMP="$MANIFEST.cover.tmp"
 : > "$NAMES_TMP"
 : > "$MISSING_TMP"
+: > "$SEEN_I"
+: > "$COVER_TMP"
 # ★ 只有真要落盘（--apply）才准备清单本体。verify/dry-run 写它纯属浪费 ——
 #   115 KB 要经 SMB 来回跑一趟，最后还是删掉。
 if [ "$DRY" = 0 ]; then : > "$MANIFEST.tmp"; fi
@@ -287,12 +345,41 @@ if [ "$DRY" = 0 ]; then : > "$MANIFEST.tmp"; fi
 #    .reseed_farm.manifest.tsv.tmp（大小和真清单一模一样）。
 #    改成 trap 统一兜底：无论从哪条路出去（正常 exit / die / set -e 报错 /
 #    Ctrl-C）都会收干净。apply 成功后这两个文件已被 mv 走，rm -f 是空操作。
-trap 'rm -f "$PROBE_SRC" "$PROBE_DST" "$NAMES_TMP" "$MISSING_TMP" "$MANIFEST.tmp"' \
+trap 'rm -f "$PROBE_SRC" "$PROBE_DST" "$NAMES_TMP" "$MISSING_TMP" "$ENUM_I" "$PRUNE_I" "$SEEN_I" "$COVER_TMP" "$MANIFEST.tmp"' \
   EXIT INT TERM
 
-for dd in $SRC_LIST; do
+# _enum_rel <源目录> <深度>：把源枚举成「相对 $FARM 的路径」，最多 depth 层。
+# ★ depth=1 ≡ 今天的 `"$dd"/*` 之 basename（逐字相同）⇒ 扁平源零变化。
+# ★ 用 find -maxdepth（与下面 cp -al 的 find 同源依赖）；不用 shell 数组，
+#   POSIX sh 没有。输出按 LC_ALL=C 排序，保证 NAMES_TMP 稳定、二次跑零 churn。
+_enum_rel() {
+  _dd="$1"; _depth="$2"
+  find "$_dd" -mindepth 1 -maxdepth "$_depth" 2>/dev/null \
+    | sed -e "s|^$_dd/||" | LC_ALL=C sort
+}
+
+# ★★ 2026-10-05：主循环遍历**两键的并集** —— 深源也必须被枚举/创建。
+#   `$SRC_LIST` 里的源按 depth=1；`$FARM_DEEP_SOURCES` 里的源按 depth=$FARM_DEPTH。
+#   同一源同时出现两处时**只跑一次**（取更深值，前面已告警）—— 用 SEEN_I 去重。
+#   ★ 遍历两趟（先扁平后深）、而非把两键拼起来 —— 拼接会丢"哪个源该用哪个深度"。
+for _pass in flat deep; do
+  case "$_pass" in
+    flat) _iter="$SRC_LIST" ;;
+    deep) _iter="$FARM_DEEP_SOURCES" ;;
+  esac
+  for dd in $_iter; do
   [ -n "$dd" ] || continue
   set +f
+  dd_orig="$dd"                 # ★ 未 map 的原值：拿去和 FARM_DEEP_SOURCES 比对
+  # 去重 + 取深：一个源若**同时**在两键里，只在深源趟跑（深度取更深的那个）。
+  #   ⇒ 扁平趟遇到"也在深源列表里的源"就跳过（前面已告警）。
+  #   用一个 SEEN_I 记录**已整体处理过**的源，避免两趟重复枚举/重复记期望集。
+  if grep -qxF "$dd_orig" "$SEEN_I" 2>/dev/null; then continue; fi
+  if [ "$_pass" = flat ] && [ -n "$FARM_DEEP_SOURCES" ]; then
+    case ",$FARM_DEEP_SOURCES," in
+      *",$dd_orig,"*) continue ;;   # 交给深源趟处理
+    esac
+  fi
   dd=$(map_path "$dd")
   if [ ! -d "$dd" ]; then
     say "  [!!] 源目录不存在，跳过: $dd"
@@ -308,40 +395,62 @@ for dd in $SRC_LIST; do
   fi
   OWNER=$(stat -c '%u:%g' "$dd")
 
-  # 直接子项 = 农场条目。这就是全部"规则"，没有深度计算。
-  for src in "$dd"/*; do
-    [ -e "$src" ] || continue
-    name=$(basename "$src")
-    dst="$FARM/$name"
+  # 深度：扁平趟 = 1（= 今天的直接子项）；深源趟 = FARM_DEPTH。
+  depth=1
+  [ "$_pass" = deep ] && depth="$FARM_DEPTH"
+  printf '%s\n' "$dd_orig" >> "$SEEN_I"
+
+  _enum_rel "$dd" "$depth" > "$ENUM_I"
+  # ★ 只枚举、不创建嵌套：顶层节点一次 `cp -al` 会把整棵子树带出来；
+  #   中间的嵌套节点（含 '/' 的 rel）**不单独建**，否则白跑、还可能踩到已建的树。
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    dst="$FARM/$rel"
     N_SRC=$((N_SRC + 1))
 
     # ★ 无论新建还是已存在，都要记进**期望集** —— prune 靠它判断"哪些该留"。
     #   （早期版本只记新建的，结果 prune 把已存在的一律当成过期删光。）
-    printf '%s\n' "$name" >> "$NAMES_TMP"
+    printf '%s\n' "$rel" >> "$NAMES_TMP"
     if [ "$DRY" = 0 ]; then
-      printf '%s\t%s\n' "$name" "$src" >> "$MANIFEST.tmp"
+      printf '%s\t%s\n' "$rel" "$dd/$rel" >> "$MANIFEST.tmp"
     fi
 
     if [ -e "$dst" ]; then
       N_HAVE=$((N_HAVE + 1))
-      set -f; continue
+      continue
+    fi
+
+    # ★★ 2026-10-05：嵌套节点（rel 含 '/'）**缺了**时怎么办？
+    #   分两种情况，靠"顶层祖先在不在农场"判：
+    #     (a) 顶层祖先**不存在** ⇒ 马上要对它做 `cp -al`，整棵子树（含本节点）都会
+    #         被带出来 ⇒ 这里**跳过**，避免重复建（也避免踩到正在重建的树）。
+    #     (b) 顶层祖先**已存在**（如上次建过的树里某个子目录被删了）⇒ 光跳过就
+    #         **永远修不好**（父节点的 cp -al 因"已存在"被跳过）⇒ 必须**单独建本节点**。
+    #   ★ 这正是"只增不删"巡检应有的自愈能力：增量修补，而非只认整树。
+    if [ -n "$rel" ] && [ "$rel" != "${rel#*/}" ]; then
+      _top="${rel%%/*}"
+      [ -e "$FARM/$_top" ] && _need_nested=1 || _need_nested=0
+      if [ "$_need_nested" = 0 ]; then
+        continue   # 交给下面（或前面）顶层那次的 cp -al 带出
+      fi
     fi
 
     if [ "$DRY" = 1 ]; then
       N_NEW=$((N_NEW + 1))
       # verify 时顺手把"缺的那条"记下来，下面打印明细用
-      [ "$VERIFY_ONLY" = 1 ] && printf '%s\t%s\n' "$name" "$src" >> "$MISSING_TMP"
-      set -f; continue
+      [ "$VERIFY_ONLY" = 1 ] && printf '%s\t%s\n' "$rel" "$dd/$rel" >> "$MISSING_TMP"
+      continue
     fi
 
     # ★ cp -al：建目录结构 + 对每个文件建**硬链接**（不复制数据）
+    src="$dd/$rel"
     if ! cp -al "$src" "$dst" 2>/dev/null; then
       # 退一步：低版本 cp 不认 -al 的组合时，走 find + ln
       mkdir -p "$dst" && find "$src" -type d -exec mkdir -p "$dst"/{} \; 2>/dev/null || true
       if ! ( cd "$src" && find . -type f -exec sh -c '
              d="$2"; mkdir -p "$(dirname "$d")"; ln "$1" "$d"' _ {} "$dst"/{} \; ) 2>/dev/null; then
-        say "  [!!] 建链接失败: $name"
-        set -f; continue
+        say "  [!!] 建链接失败: $rel"
+        continue
       fi
     fi
     # 只给**目录**改属主：目录是新造的；文件是硬链接 = 同一个 inode，
@@ -352,41 +461,111 @@ for dd in $SRC_LIST; do
     find "$dst" -type d -exec $SUDO chown "$OWNER" {} + 2>/dev/null || true
 
     N_NEW=$((N_NEW + 1))
-    set -f
+  done < "$ENUM_I"
   done
-  set -f
 done
 IFS=$OLDIFS
 set +f
 
 N_EXPECT=$(wc -l < "$NAMES_TMP" 2>/dev/null | tr -d ' \t' || echo 0)
+
+# ★★ 2026-10-05：「覆盖集」—— 判孤儿的唯一正确口径。
+#   不变量：农场由「对每个**顶层**期望条目一次 `cp -al`」建成 ⇒ 农场里**任何**路径
+#   要么是某个期望条目本身，要么是它的子孙。于是：
+#       农场路径 rel 合法  ⟺  rel 是期望条目的前缀之一（= rel ∈ COVER）
+#       COVER = { 每个期望 rel 的所有前缀（含自身，不含空串） }
+#   例：期望 {PackA, Arrow.S01-S08, Arrow.S01-S08/Arrow.S01.Bluray}
+#       ⇒ COVER = {PackA, Arrow.S01-S08, Arrow.S01-S08/Arrow.S01.Bluray}
+#       农场里的 PackA/single/s.mkv 的祖先 PackA ∈ COVER ⇒ **合法**（cp -al 带出的）。
+#   ★ 这条同时解释了为什么"扁平源的子树"不会被误报孤儿（旧代码只数一层、看不见它，
+#     新代码看见了、但用 COVER 判它合法）。
+#   ★ 也解释了为什么不能用"全局 DEPTH_ANY"——扁平源按深度 1 枚举，却带出整棵子树，
+#     拿统一深度去数必然把 `PackA/single` 当孤儿（本计划最易错处）。
+# （COVER_TMP 已在上面临时文件区声明并清空；这里只需重建内容。）
+if [ "$N_EXPECT" -gt 0 ]; then
+  while IFS= read -r _rel; do
+    [ -n "$_rel" ] || continue
+    # 逐个前缀：a/b/c → a、a/b、a/b/c
+    printf '%s\n' "$_rel" | awk -F/ '{p=""; for(i=1;i<=NF;i++){p=(i==1)?$i:p"/"$i; print p}}'
+  done < "$NAMES_TMP" >> "$COVER_TMP"
+fi
+# ★ 排序去重；COVER 必须用 LC_ALL=C sort -u（与 find 的名称排序一致）。
+LC_ALL=C sort -u "$COVER_TMP" -o "$COVER_TMP"
+
+# is_covered <rel>：rel 本身或其**任一祖先** ∈ COVER？
+#   ★ 判据是"整条链上任一前缀命中"，不是只看直接父 —— 因为 `cp -al` 会带出
+#     **多层**子树（扁平源的 PackA/single/s.mkv：父 PackA/single 不在 COVER，
+#     但祖父 PackA 在）。只看直接父会把深层文件全误报孤儿。
+is_covered() {
+  grep -qxF "$1" "$COVER_TMP" 2>/dev/null && return 0
+  _c="$1"
+  while :; do
+    case "$_c" in
+      */*) _c="${_c%/*}" ;;
+      *)   break ;;
+    esac
+    grep -qxF "$_c" "$COVER_TMP" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# farm_rel_all：把农场里**所有**条目（任意深度）以「农场相对路径」列出。
+# ★ 孤儿判据用全深度（不是 DEPTH_ANY）—— 才能看见深树里被删源的残留。
+farm_rel_all() {
+  find "$FARM" -mindepth 1 2>/dev/null | sed -e "s|^$FARM/||" | LC_ALL=C sort
+}
+
+# N_FARM = 农场里**合法**（∈ COVER）的条目数 —— 与 N_HAVE 同口径（都是"期望条目存在"），
+#   区别只是 N_HAVE 在枚举时数、N_FARM 从盘上数。二者应相等（都 = |期望 ∩ 盘|）。
+#   无深源时 COVER = 期望的一层名字 ⇒ N_FARM ≡ 旧 `"$FARM"/*` 计数（逐字等价）。
+# ★ N_FARM_RAW = 农场里**所有**条目数（不论合法与否）—— **prune 安全闸必须用它**：
+#   期望集为空时 N_FARM(=0) 会骗过"农场里有东西吗"的判断，让 prune 静默跳过而不是报警。
 N_FARM=0
-for dst in "$FARM"/*; do [ -e "$dst" ] && N_FARM=$((N_FARM + 1)); done
+farm_rel_all > "$PRUNE_I"
+N_FARM_RAW=$(wc -l < "$PRUNE_I" 2>/dev/null | tr -d ' \t'); [ -n "$N_FARM_RAW" ] || N_FARM_RAW=0
+if [ "$N_EXPECT" -gt 0 ]; then
+  while IFS= read -r _r; do
+    [ -n "$_r" ] || continue
+    is_covered "$_r" && N_FARM=$((N_FARM + 1))
+  done < "$PRUNE_I"
+fi
 
 # ---------- 3) prune：农场里有、期望集里没有 → 源已经没了（或改名了）----------
 N_PRUNE=0
-if [ "$PRUNE" = 1 ] && [ "$N_FARM" -gt 0 ]; then
+if [ "$PRUNE" = 1 ] && [ "$N_FARM_RAW" -gt 0 ]; then
   # ★ 安全闸：期望集为空却要 prune = 几乎一定是 DATA_DIRS 读错/全都没了，
   #   真删下去会把**整个农场删光**。宁可停下让人看一眼。
   if [ "$N_EXPECT" -eq 0 ]; then
     say ""
-    say "  [!!] 期望集为 0，但农场里有 $N_FARM 条 —— 拒绝 prune。"
+    say "  [!!] 期望集为 0，但农场里有 $N_FARM_RAW 条 —— 拒绝 prune。"
     say "       多半是 $COMPOSE_DIR/.env 的 DATA_DIRS 读不到，或所有源目录都不存在。"
     say "       先跑一次不带 --prune 的 --apply 看清楚，再决定。"
   else
-    for dst in "$FARM"/*; do
-      [ -e "$dst" ] || continue
-      name=$(basename "$dst")
-      if ! grep -qxF "$name" "$NAMES_TMP" 2>/dev/null; then
-        if [ "$DRY" = 1 ]; then
-          say "  [prune·预演] 将删除: $name"
-        else
-          say "  [prune] 源已不存在，删除农场条目: $name"
-          rm -rf "$dst"
-        fi
-        N_PRUNE=$((N_PRUNE + 1))
+    # ★ 2026-10-05：孤儿 = 农场里**不在覆盖集**里的条目。用相对路径键（深度 1 时 ≡ basename）。
+    #   只报/删**孤儿树的顶层**（父已被覆盖、或本身就是顶层）—— 否则一棵被删的深树会
+    #   每层各报一次、`--prune` 还会逐层 rm -rf（虽幂等但噪音大且易误读）。
+    #   子孙保护天然成立：某孤儿若有**被覆盖的子孙**（不该发生，除非源被部分删），
+    #   COVER 里只有前缀、不会覆盖"孤儿之下的活条目" —— 故此处额外用 grep 兜一道。
+    #   ★ 落临时文件再 read，绝不 `find | while` —— 那是子 shell，N_PRUNE 会丢。
+    farm_rel_all > "$PRUNE_I"
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      is_covered "$rel" && continue
+      # 只处理"孤儿树的**顶层**"：其父要么是农场根（视为已覆盖）、要么已被覆盖。
+      # 一棵整树消失时，只有顶层那行的父是"根"，其余内层的父都未覆盖 ⇒ 被跳过。
+      _parent="${rel%/*}"
+      [ "$_parent" = "$rel" ] && _parent=""        # 顶层：无父（= 根）
+      if [ -n "$_parent" ] && ! is_covered "$_parent"; then
+        continue
       fi
-    done
+      if [ "$DRY" = 1 ]; then
+        say "  [prune·预演] 将删除: $rel"
+      else
+        say "  [prune] 源已不存在，删除农场条目: $rel"
+        rm -rf "$FARM/$rel"
+      fi
+      N_PRUNE=$((N_PRUNE + 1))
+    done < "$PRUNE_I"
   fi
 fi
 
@@ -401,15 +580,29 @@ fi
 
 # ---------- 4) 汇总 ----------
 say ""
-say "源直接子项合计 : $N_SRC   （= 本次期望集 $N_EXPECT 条）"
+# ★ 2026-10-05：有深源时 N_SRC 含**嵌套层**（不只直接子项）—— 而 N_NEW 是**如实计数**
+#   （每个顶层直接子项算 1，一个深源 = 父容器 + N 个子层，不是一次 cp -al 计 1）。
+say "期望集条目合计 : $N_SRC   （= 本次期望集 $N_EXPECT 条）$([ -n "$FARM_DEEP_SOURCES" ] && echo '  ★ 含嵌套层（深源按 FARM_DEPTH 展开）')"
 if [ "$VERIFY_ONLY" = 1 ]; then
   # 三条漂移各自是**不同的事**，不能合成一个数：
   #   源有农场无 → 新内容没进农场（cross-seed 白跑，搜不到这部）
   #   农场有源无 → **源删了/改名了，农场那条还留着**（cross-seed 照样拿去搜 = 白烧额度）
   #   源目录本身缺失 / 跨卷 → 期望集不完整，**上面的数都不可信**（比有漂移更严重）
   N_MISSING=$((N_EXPECT - N_HAVE))
-  N_ORPHAN=$((N_FARM - N_HAVE))
-  say "农场现有条目   : $N_FARM"
+  # ★ 2026-10-05：孤儿 = 农场里**不在覆盖集**的**顶层**条目（内层交给它那次的整树处理）。
+  #   不再用 `N_FARM - N_HAVE` —— 那个恒等式只在"农场与期望同粒度"时成立，
+  #   混合扁平+深源时 N_FARM（合法条目）含深层、N_HAVE（枚举计数）粒度不同，会算错。
+  N_ORPHAN=0
+  farm_rel_all > "$PRUNE_I"
+  while IFS= read -r _r; do
+    [ -n "$_r" ] || continue
+    is_covered "$_r" && continue
+    _p="${_r%/*}"
+    [ "$_p" = "$_r" ] && _p=""
+    if [ -n "$_p" ] && ! is_covered "$_p"; then continue; fi
+    N_ORPHAN=$((N_ORPHAN + 1))
+  done < "$PRUNE_I"
+  say "农场现有条目   : $N_FARM   （合法：∈ 期望覆盖范围）"
   say "源有但农场没有 : $N_MISSING"
   say "农场有但源没有 : $N_ORPHAN"
   [ "$N_MISS" -gt 0 ]     && say "源目录缺失     : $N_MISS"
@@ -434,13 +627,17 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     say ""
     say "  [漂移] 农场里有、源里没有（源被删或改名了）："
     SHOWN=0
-    for dst in "$FARM"/*; do
-      [ -e "$dst" ] || continue
-      nm=$(basename "$dst")
-      grep -qxF "$nm" "$NAMES_TMP" 2>/dev/null && continue
+    # ★ 2026-10-05：用 COVER 判孤儿（与上面 N_ORPHAN 同口径、同粒度为"顶层"）。
+    farm_rel_all > "$PRUNE_I"
+    while IFS= read -r nm; do
+      [ -n "$nm" ] || continue
+      is_covered "$nm" && continue
+      _p="${nm%/*}"
+      [ "$_p" = "$nm" ] && _p=""
+      if [ -n "$_p" ] && ! is_covered "$_p"; then continue; fi
       if [ "$SHOWN" -lt 20 ]; then say "      $nm"; fi
       SHOWN=$((SHOWN + 1))
-    done
+    done < "$PRUNE_I"
     [ "$SHOWN" -gt 20 ] && say "      …还有 $((SHOWN - 20)) 条"
     say "      ★ 删不删由人定：确认源真的没了，再跑 --apply --prune。"
     say "        本脚本**只报告、绝不自动删** —— 判「源没了」的依据就是上面这份清单，"
@@ -472,6 +669,7 @@ elif [ "$DRY" = 1 ]; then
   say "  源目录缺失   : $N_MISS"
   say "  跨卷跳过     : $N_SKIP_DEV"
   [ "$PRUNE" = 1 ] && say "  将要删除     : $N_PRUNE   （--prune 预演）"
+  [ -n "$FARM_DEEP_SOURCES" ] && say "  ★ 含嵌套层：一个深源 = 父容器 + N 个子层（按 FARM_DEPTH=$FARM_DEPTH 展开）"
   say ""
   say "看清楚了就加 --apply 真建。"
 else
@@ -480,6 +678,7 @@ else
   say "  源目录缺失   : $N_MISS"
   say "  跨卷跳过     : $N_SKIP_DEV"
   [ "$PRUNE" = 1 ] && say "  已删除       : $N_PRUNE"
+  [ -n "$FARM_DEEP_SOURCES" ] && say "  ★ 含嵌套层：一个深源 = 父容器 + N 个子层（按 FARM_DEPTH=$FARM_DEPTH 展开）"
   say ""
   # ★ 这一段只在「还没切换」时才有意义。切换过之后 DATA_DIRS 已经是农场了，
   #   再往下走会把 dataDirs 指回 49 条 —— 那是**回退**，不是下一步。

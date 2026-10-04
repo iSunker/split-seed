@@ -15,8 +15,11 @@ qbittorrent:
   # 的回环会 timeout（2026-09-11 实测）。
   url: "http://qbittorrent-reseed:3060"
 
-  # subnet_whitelist = 依赖 qB 局域网免密白名单（推荐，见 patches/reseed-qbit.conf.md）
+  # subnet_whitelist = 依赖 qB 局域网免密白名单（见 patches/reseed-qbit.conf.md）
   # password         = 用户名/密码登录（密码放 .env 的 QBIT_PASSWORD）
+  # apikey           = ★ 推荐：只读 API Key（Authorization: Bearer），不改 qB conf、
+  #                    不动白名单；钥匙放 .env 的 QB_API_KEY（别名 QBIT_API_KEY）。
+  #                    qB v5.2.4 后白名单为空 ⇒ 172.x 无鉴权请求 403，这个模式即其修法。
   auth_mode: "${QBIT_AUTH_MODE}"
   username: admin
   password: "${QBIT_PASSWORD}"

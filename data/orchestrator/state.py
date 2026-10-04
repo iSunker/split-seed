@@ -83,6 +83,27 @@ TODO_PRIORITY: dict[str, int] = {
     STAGE_UNMATCHED: 3,
 }
 
+# --------------------------------------------------------------------------- #
+# 可发种状态（`movie.can_publish`）
+# --------------------------------------------------------------------------- #
+# ★ 2026-10-05：用户指令「给库里 UNMATCHED 的种子加一个字段『可发种』（未来自动
+#   发种用）」。**当前只写不读** —— 先把状态存下来，自动发种逻辑以后再接。
+#
+# ★★ 它与 `stage` **正交**，绝不属于 `ALL_STAGES`：
+#   `stage` 回答「这个单片搜到没有」，`can_publish` 回答「将来能不能拿去发种」。
+#   两者会相关（多数 CANDIDATE 是 UNMATCHED），但**不能互相推导** ——
+#   `PUBLISHED` 完全可能落在 `MATCHED`/`SEEDING` 上（搜到了、也发过了）。
+#   把它塞进 `ALL_STAGES` 会让 `todo()`/`sync`/出勤率分母全错。
+CAN_PUBLISH_NO = "NO"                # 默认：未评估 / 不可发
+CAN_PUBLISH_CANDIDATE = "CANDIDATE"  # 候选：手上有一份可发的单片
+CAN_PUBLISH_PUBLISHED = "PUBLISHED"  # 已发布（发种那步做过了）
+CAN_PUBLISH_EXCLUDED = "EXCLUDED"    # 人工否决，永不自动发
+
+CAN_PUBLISH_VALUES = (
+    CAN_PUBLISH_NO, CAN_PUBLISH_CANDIDATE,
+    CAN_PUBLISH_PUBLISHED, CAN_PUBLISH_EXCLUDED,
+)
+
 #: 未命中后，**每个站**默认多久重搜一次。
 #:
 #: ★ 2026-09-11 由 7 天改为 14 天（账号安全 > 命中延迟）。
@@ -1218,6 +1239,9 @@ CREATE TABLE IF NOT EXISTS movie (
   matched_indexers  TEXT NOT NULL DEFAULT '[]',
   matched_hashes    TEXT NOT NULL DEFAULT '[]',
   seeding_count     INTEGER NOT NULL DEFAULT 0,
+  -- ★ 2026-10-05：可发种状态（见顶部 CAN_PUBLISH_*）。**与 stage 正交**，
+  --   默认 'NO' ⇒ 老库补列后行为零变化。当前**只写不读**（自动发种以后再接）。
+  can_publish       TEXT NOT NULL DEFAULT 'NO',
   last_error        TEXT,
   note              TEXT,
   updated_at        TEXT,
@@ -1334,6 +1358,10 @@ class StateStore:
         if "indexer_seen" not in mcols:
             self.con.execute(
                 "ALTER TABLE movie ADD COLUMN indexer_seen TEXT NOT NULL DEFAULT '{}'")
+        # ★ 2026-10-05：可发种状态列。走 PRAGMA 守卫 ⇒ 幂等；老库补列后默认 'NO'。
+        if "can_publish" not in mcols:
+            self.con.execute(
+                "ALTER TABLE movie ADD COLUMN can_publish TEXT NOT NULL DEFAULT 'NO'")
         # ★ 索引也要给**已存在的老库**补上 —— SCHEMA 里的 CREATE INDEX 只在建库时跑，
         #   老库 executescript 虽然也会执行那句 IF NOT EXISTS……但它跑在 _migrate 之前、
         #   而老库的 attempt 表早就存在，所以其实会建上。这里再兜一次是因为
@@ -1473,6 +1501,33 @@ class StateStore:
             added += cur.rowcount or 0
         self.con.commit()
         return added
+
+    def set_can_publish(self, pack: str, dir_name: str, value: str) -> int:
+        """设置单件的**可发种状态**（`CAN_PUBLISH_VALUES` 之一）。
+
+        ★ 与 `stage` **完全正交**：这里**只动 `can_publish`**，绝不碰 stage/attempts
+          /next_retry_at。`register_dirs` 的 ON CONFLICT 也**不动**它 ⇒ 重扫不重置。
+        返回受影响行数（该 pack 下没有这个 dir_name 时 = 0）。
+        """
+        if value not in CAN_PUBLISH_VALUES:
+            raise ValueError(
+                f"can_publish 取值非法: {value!r}（应为 {CAN_PUBLISH_VALUES} 之一）")
+        cur = self.con.execute(
+            "UPDATE movie SET can_publish=?, updated_at=? WHERE pack=? AND dir_name=?",
+            (value, _now(), pack, dir_name),
+        )
+        self.con.commit()
+        return cur.rowcount or 0
+
+    def can_publish_counts(self, pack: str) -> dict[str, int]:
+        """`{can_publish 值: 件数}` —— 只读分档统计（报表/self-check 用）。"""
+        out = {v: 0 for v in CAN_PUBLISH_VALUES}
+        for r in self.con.execute(
+            "SELECT can_publish, COUNT(*) AS n FROM movie WHERE pack=? GROUP BY can_publish",
+            (pack,),
+        ):
+            out[r["can_publish"]] = r["n"]
+        return out
 
     def dir_paths(self, pack: str) -> dict[str, str]:
         """`{规范化完整路径: 单片名}` —— 给 `dir_name_of()` 做最长前缀匹配用。

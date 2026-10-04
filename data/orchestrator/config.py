@@ -22,27 +22,52 @@ class ConfigError(Exception):
     """配置非法时抛出，附带可读信息。"""
 
 
+def _qbit_api_key() -> str:
+    """qB 只读 API Key（`QB_API_KEY` 优先，`QBIT_API_KEY` 兼容别名）。
+
+    ★ 与 `state.py::_qb_auth_header` **同一把钥匙、同一套变量名** —— 两处必须一致，
+      否则 `auth_mode=apikey` 时 orchestrator 认得 key 而 `state` 子命令认不得
+      （或反之）。★ 这里**不缓存**：每次读环境，便于测试注入。
+    """
+    return (os.environ.get("QB_API_KEY") or os.environ.get("QBIT_API_KEY") or "").strip()
+
+
 # --------------------------------------------------------------------------- #
 # 数据模型
 # --------------------------------------------------------------------------- #
 @dataclass
 class QbitConfig:
     url: str = "http://127.0.0.1:3060"
-    # subnet_whitelist = 依赖 qB 的局域网免密白名单（推荐，对齐你另一个 qB 实例）
+    # subnet_whitelist = 依赖 qB 的局域网免密白名单
     # password         = 用用户名/密码登录
+    # apikey           = ★ 2026-10-05：只读 API Key（Authorization: Bearer），
+    #                    **不改 qB 的 conf、不动白名单** —— 与 `state.py::_qb_auth_header`
+    #                    同一套钥匙（`.env` 的 `QB_API_KEY`，别名 `QBIT_API_KEY`）。
+    #                    qB v5.2.4 后白名单为空会让 172.x 网段无鉴权请求 403，
+    #                    这个模式就是那条 403 循环的"我们侧"修法。
     auth_mode: str = "subnet_whitelist"
     username: str = "admin"
     password: str = ""
-    # 注入单种统一使用的分类，便于隔离/汇报/清理
+    # 注入单种统一使用的分类，便于隔离 / 汇报 / 清理
     category: str = "reseed-singles"
     # NAS 路径 <-> 容器路径映射；本环境 /volume1/video 是 1:1，通常留默认即可
     path_mapping: dict[str, str] = field(default_factory=lambda: {"/volume1/video": "/volume1/video"})
 
+    #: 认得的鉴权模式。★ `apikey` 是新增的；`config.py` 与 `qbit_client.py` 必须**一起**
+    #: 认它 —— 曾经 `.env.example` 推荐了 `apikey`、而这两处只认前两个 ⇒ orchestrator
+    #: 启动即 ConfigError 退出（2026-10-04 实测，`Exited (1)` 后再不自愈）。
+    AUTH_MODES = ("subnet_whitelist", "password", "apikey")
+
     def validate(self) -> None:
-        if self.auth_mode not in ("subnet_whitelist", "password"):
-            raise ConfigError(f"qbittorrent.auth_mode 只能是 subnet_whitelist 或 password，收到: {self.auth_mode!r}")
+        if self.auth_mode not in self.AUTH_MODES:
+            raise ConfigError(
+                f"qbittorrent.auth_mode 只能是 {' / '.join(self.AUTH_MODES)}，收到: {self.auth_mode!r}")
         if self.auth_mode == "password" and not self.password:
             raise ConfigError("auth_mode=password 时必须提供 qbittorrent.password（建议放 .env 再注入）")
+        if self.auth_mode == "apikey" and not _qbit_api_key():
+            raise ConfigError(
+                "auth_mode=apikey 时必须提供 QB_API_KEY（放 .env，compose `environment:` 透传；"
+                "别名 QBIT_API_KEY 也认）")
         if not self.url.startswith(("http://", "https://")):
             raise ConfigError(f"qbittorrent.url 必须以 http(s):// 开头，收到: {self.url!r}")
 

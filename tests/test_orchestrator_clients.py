@@ -237,6 +237,111 @@ ck("★★ 那一次调用**没有**传 `strict=True`（带上的话修复等于
    all(not any(k.arg == "strict" for k in c.keywords) for c in _ping_calls))
 
 print()
+print("=== ④ ★★ `auth_mode=apikey`：.env 推荐了它，代码必须认得它 ===")
+#   ★★★ 这组守的是 **2026-10-04 实测的一次静默死亡**：
+#     `.env` 按新版 `.env.example` 设了 `QBIT_AUTH_MODE=apikey`（明文推荐），
+#     而当时的 `config.py` **只认 subnet_whitelist / password**
+#     ⇒ `preflight` 抛 `ConfigError` ⇒ 容器 `Exited (1)`（而 orchestrator 是
+#     一次性 CLI、`restart: "no"`）⇒ **崩了就躺着，不报警**。
+#   ★ 症状与前文那条 NameError **一模一样**：退出码 1，看着像"预检发现环境不合"。
+#   ★ 判据形状：**承诺（.env.example 的取值）与代码（validate 的白名单）必须一致**。
+_QBIT_SRC = (REPO / "data" / "orchestrator" / "qbit_client.py").read_text(encoding="utf-8")
+_CFG_SRC = (REPO / "data" / "orchestrator" / "config.py").read_text(encoding="utf-8")
+
+# ---- ④a config：三种模式都认，apikey 无 key 要拒绝 ----
+import orchestrator.config as _cfgmod  # noqa: E402
+from orchestrator.config import QbitConfig, ConfigError  # noqa: E402
+
+_orig_key = os.environ.pop("QB_API_KEY", None)
+_orig_key2 = os.environ.pop("QBIT_API_KEY", None)
+try:
+    # a1 白名单里必须有 apikey（否则 .env 推荐的取值直接崩）
+    ck("★★ `apikey` 在 AUTH_MODES 白名单里（不然 .env 推荐值一设就崩）",
+       "apikey" in getattr(QbitConfig, "AUTH_MODES", ()),
+       f"AUTH_MODES={getattr(QbitConfig, 'AUTH_MODES', None)}")
+
+    # a2 apikey 但没给 key ⇒ 必须**明确**拒绝（不能装作没事去裸调）
+    _e = None
+    try:
+        QbitConfig(auth_mode="apikey").validate()
+    except ConfigError as _ex:
+        _e = str(_ex)
+    ck("★ apikey 但无 QB_API_KEY ⇒ 拒绝且报错里有 `QB_API_KEY`",
+       _e is not None and "QB_API_KEY" in _e, repr(_e))
+
+    # a3 apikey + key ⇒ 通过
+    os.environ["QB_API_KEY"] = "abc123"
+    _ok3 = True
+    try:
+        QbitConfig(auth_mode="apikey").validate()
+    except Exception as _ex:  # noqa: BLE001
+        _ok3, = (False,)
+    ck("apikey + QB_API_KEY ⇒ 校验通过", _ok3 is True)
+
+    # a4 别名 QBIT_API_KEY 也认
+    os.environ.pop("QB_API_KEY", None)
+    os.environ["QBIT_API_KEY"] = "alias1"
+    _ok4 = True
+    try:
+        QbitConfig(auth_mode="apikey").validate()
+    except Exception:  # noqa: BLE001
+        _ok4 = False
+    ck("apikey + QBIT_API_KEY（别名）⇒ 也通过", _ok4 is True)
+
+    # a5 ★ 旧两模式零变化
+    for _m, _kw in (("subnet_whitelist", {}), ("password", {"password": "x"})):
+        _okm = True
+        try:
+            QbitConfig(auth_mode=_m, **_kw).validate()
+        except Exception:  # noqa: BLE001
+            _okm = False
+        ck(f"旧模式 {_m} 仍通过（零行为变化）", _okm is True)
+
+    # a6 未知模式仍拒绝（没把闸门拆掉）
+    _eu = None
+    try:
+        QbitConfig(auth_mode="bogus").validate()
+    except ConfigError as _ex:
+        _eu = str(_ex)
+    ck("未知模式仍被拒绝（闸门没拆）", _eu is not None, repr(_eu))
+finally:
+    os.environ.pop("QB_API_KEY", None)
+    os.environ.pop("QBIT_API_KEY", None)
+    if _orig_key is not None:
+        os.environ["QB_API_KEY"] = _orig_key
+    if _orig_key2 is not None:
+        os.environ["QBIT_API_KEY"] = _orig_key2
+
+# ---- ④b client：apikey 模式必须把 Bearer 头**注入到 http 默认头** ----
+os.environ["QB_API_KEY"] = "K1"
+try:
+    _qbk = QbitClient("http://example.invalid:3060", auth_mode="apikey")
+    ck("★★ apikey 模式：http 默认头带 `Authorization: Bearer K1`",
+       _qbk.http.default_headers.get("Authorization") == "Bearer K1",
+       repr(_qbk.http.default_headers.get("Authorization")))
+    _qbw = QbitClient("http://example.invalid:3060", auth_mode="subnet_whitelist")
+    ck("★ subnet_whitelist 模式：**没有** Authorization 头（零行为变化）",
+       "Authorization" not in _qbw.http.default_headers,
+       repr(_qbw.http.default_headers))
+    # ★ 前提：上面那条不能恒真（whitelist 模式确实构造出了 http）
+    ck("前提：whitelist 客户端也有默认头（只是没有 Authorization）",
+       "Referer" in _qbw.http.default_headers)
+finally:
+    os.environ.pop("QB_API_KEY", None)
+
+# ---- ④c ★★ 反向：`.env.example` 推荐的值，代码必须**全体**认得 ----
+#   否则又是"文档承诺、代码不认"。这里直接把 .env.example 里的现值读出来对照。
+_envx = (REPO / ".env.example").read_text(encoding="utf-8")
+import re as _re  # noqa: E402
+_m = _re.search(r"^QBIT_AUTH_MODE=(.+)$", _envx, _re.M)
+_envx_mode = (_m.group(1).strip() if _m else "")
+ck("前提：.env.example 里能读到 QBIT_AUTH_MODE",
+   bool(_envx_mode), repr(_envx_mode))
+ck("★★ .env.example 的 QBIT_AUTH_MODE 值在 AUTH_MODES 白名单里（文档与代码不打架）",
+   _envx_mode in getattr(QbitConfig, "AUTH_MODES", ()),
+   f".env.example={_envx_mode!r} vs AUTH_MODES={getattr(QbitConfig, 'AUTH_MODES', None)}")
+
+print()
 if _bad:
     print(f"!!! {_bad} 个失败 / {_ok + _bad} 条")
     sys.exit(1)

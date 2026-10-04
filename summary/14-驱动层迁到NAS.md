@@ -35,7 +35,7 @@ schtasks /Query /TN "reseed-drive-loop" /XML
 <StopOnIdleEnd>true</StopOnIdleEnd>
 <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
 <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-<Command>D:\Projects\dabaochaibaozuozhongxiangmu\reseed-toolkit\scripts\drive-loop-once.cmd</Command>
+<Command>D:\Projects\reseed\scripts\drive-loop-once.cmd</Command>
 ```
 
 `StopOnIdleEnd` 的含义是：**机器一旦"不再空闲"（你碰鼠标/键盘），Windows 直接

@@ -1,9 +1,12 @@
 """qBittorrent WebUI API v2 客户端（只用到本项目需要的接口）。
 
-两种鉴权：
-  - subnet_whitelist：qB 开了局域网/本机免密白名单，直接调，无需登录（推荐，
-    对齐你另一个 qB 实例的既有做法）。
+三种鉴权：
+  - subnet_whitelist：qB 开了局域网/本机免密白名单，直接调，无需登录。
   - password：POST /api/v2/auth/login 拿 SID Cookie 后再调。
+  - apikey：★ 2026-10-05 新增 —— 只用 `Authorization: Bearer <QB_API_KEY>` 头，
+    **不登录、不改 qB 的 conf、不动白名单**。与 `state.py::_qb_auth_header` 同一套钥匙
+    （`.env` 的 `QB_API_KEY`，别名 `QBIT_API_KEY`）。qB v5.2.4 后白名单为空会让
+    172.x 网段的无鉴权请求 403 —— 这个模式就是那条 403 循环的"我们侧"修法。
 
 所有请求都带 Referer/Origin，避免 qB 的 CSRF/HostHeader 校验挡下（reseed 实例
 建议照你现有实例的做法关掉这些校验，见 patches/reseed-qbit.conf.md）。
@@ -11,10 +14,21 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from .http import HttpClient, HttpError
 
 log = logging.getLogger("reseed.qbit")
+
+
+def _qbit_api_key() -> str:
+    """qB 只读 API Key（`QB_API_KEY` 优先，`QBIT_API_KEY` 兼容别名）。
+
+    ★ 与 `config.py::_qbit_api_key` / `state.py::_qb_auth_header` **同一把钥匙、同一套
+      变量名** —— 三处必须一致。这里**不缓存**，便于测试注入。
+    """
+    return (os.environ.get("QB_API_KEY") or os.environ.get("QBIT_API_KEY") or "").strip()
+
 
 # torrent 状态分类（qB 4.6.x）
 SEEDING_STATES = {"uploading", "stalledUP", "queuedUP", "forcedUP"}
@@ -49,16 +63,26 @@ class QbitClient:
         self.auth_mode = auth_mode
         self.username = username
         self.password = password
-        # qB 要求带 Referer；关掉 HostHeaderValidation 后也无妨
-        self.http = HttpClient(timeout=timeout,
-                               default_headers={"Referer": self.base, "Origin": self.base})
+        # qB 要求带 Referer；关掉 HostHeaderValidation 后也无妨。
+        headers = {"Referer": self.base, "Origin": self.base}
+        # ★ 2026-10-05：apikey 模式 —— 每个请求都带 `Authorization: Bearer <key>`，
+        #   不登录。与 `state.py::_qb_auth_header` 完全同形（同变量、同头）。
+        if auth_mode == "apikey":
+            k = _qbit_api_key()
+            if k:
+                headers["Authorization"] = f"Bearer {k}"
+        self.http = HttpClient(timeout=timeout, default_headers=headers)
 
     def _url(self, path: str) -> str:
         return f"{self.base}{path}"
 
     # -- 鉴权 / 连接 ------------------------------------------------------- #
     def connect(self) -> str:
-        """建立连接（必要时登录），返回 qB 版本号，失败抛 QbitError。"""
+        """建立连接（必要时登录），返回 qB 版本号，失败抛 QbitError。
+
+        ★ `apikey` 与 `subnet_whitelist` 都是"不登录、直接调"——差别只是前者多带一个
+          `Authorization` 头（在 `__init__` 里已注入）。所以这里两者走同一条路。
+        """
         if self.auth_mode == "password":
             self.login()
         try:

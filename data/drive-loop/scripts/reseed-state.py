@@ -428,6 +428,14 @@ def cmd_report(args) -> int:
         for k in S.ALL_STAGES:
             _say(f"    {k:<13} {sm[k]:>5}   {meanings[k]}")
 
+        # ★ 2026-10-05：可发种分档（只读；与 stage 正交）。全 0（老库默认）时不刷屏。
+        cpc = st.can_publish_counts(args.pack)
+        if any(cpc[k] for k in S.CAN_PUBLISH_VALUES if k != S.CAN_PUBLISH_NO):
+            _say("")
+            _say("    可发种        数量")
+            for k in S.CAN_PUBLISH_VALUES:
+                _say(f"    {k:<13} {cpc[k]:>5}")
+
         idx = _idx_list(args.indexers)
         pairs = st.todo_detail(args.pack, indexers_now=idx,
                                include_cooldown=args.include_cooldown,
@@ -691,6 +699,11 @@ def cmd_show(args) -> int:
         _say(f"{r['dir_name']}")
         for k in ("stage", "attempts", "last_attempt_at", "next_retry_at", "seeding_count"):
             _say(f"  {k:<16} {r[k]}")
+        # ★ 2026-10-05：可发种状态（只读展示；老库无此列时 sqlite3.Row 取不到 ⇒ 兜底 '-'）
+        try:
+            _say(f"  {'can_publish':<16} {r['can_publish']}")
+        except (IndexError, KeyError):
+            _say(f"  {'can_publish':<16} -")
         for k in ("searched_indexers", "indexer_seen", "skipped_indexers",
                   "matched_indexers", "matched_hashes"):
             _say(f"  {k:<16} {r[k]}")
@@ -698,6 +711,64 @@ def cmd_show(args) -> int:
         for a in st.attempts(r["id"]):
             _say(f"  {a['at']}  {a['kind']:<7} {a['result']:<10} "
                  f"idx={a['indexers']} skip={a['skipped_indexers']} {a['note'] or ''}")
+    return 0
+
+
+def cmd_mark(args) -> int:
+    """给单片打「可发种」状态（`movie.can_publish`）—— ★ **只写不读**，状态机零改动。
+
+    为什么动词叫 `mark` 而不叫 `publish`：这一步**只是打标记**（将来自动发种用），
+    并没有真的去发种。叫 `publish` 会让人以为"跑完就发布了"（`state.py` 头注也这么说）。
+
+    与 `stage` **正交**：这里只动 `can_publish`，绝不碰 stage/attempts/next_retry_at。
+      · `--dir X --set V`      单件。
+      · `--all-unmatched --set V`  批量：所有 `stage=UNMATCHED` 的件（= 用户原话
+        「给库里 UNMATCHED 的种子加字段」）。
+      · `--dry-run`            只打印将改哪些，**不写库**。
+    取值 ∈ `CAN_PUBLISH_VALUES`（NO/CANDIDATE/PUBLISHED/EXCLUDED）。
+    """
+    val = (args.set or "").upper()
+    if val not in S.CAN_PUBLISH_VALUES:
+        _say(f"[!!] --set 取值非法: {args.set!r}（应为 {' / '.join(S.CAN_PUBLISH_VALUES)}）")
+        return 2
+    if not args.dir and not args.all_unmatched:
+        _say("[!!] 必须给 --dir <单片名> 或 --all-unmatched 之一")
+        return 2
+    if args.dir and args.all_unmatched:
+        _say("[!!] --dir 与 --all-unmatched 互斥")
+        return 2
+
+    with S.StateStore(args.db) as st:
+        if st.pack(args.pack) is None:
+            _say(f"[!!] 未登记: {args.pack}（先 init）")
+            return 2
+
+        if args.all_unmatched:
+            rows = st.movies(args.pack, stages=[S.STAGE_UNMATCHED])
+            names = [r["dir_name"] for r in rows]
+        else:
+            r = st.movie_by_dir(args.pack, args.dir) or st.movie_by_path(args.pack, args.dir)
+            if r is None:
+                _say(f"[!!] 找不到: {args.dir}")
+                return 2
+            names = [r["dir_name"]]
+
+        if not names:
+            _say(f"{args.pack}: 没有可标记的件（--all-unmatched 命中 0 条）")
+            return 0
+
+        if args.dry_run:
+            _say(f"[dry-run] 将把 {len(names)} 件标为 can_publish={val}（未写库）：")
+            for n in names:
+                _say(f"    {n}")
+            return 0
+
+        changed = 0
+        for n in names:
+            changed += st.set_can_publish(args.pack, n, val)
+        _say(f"{args.pack}: 已把 {changed} 件标为 can_publish={val}")
+        cnt = st.can_publish_counts(args.pack)
+        _say("  分档: " + "  ".join(f"{k}={cnt[k]}" for k in S.CAN_PUBLISH_VALUES))
     return 0
 
 
@@ -854,6 +925,16 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--pack", required=True)
     a.add_argument("--movie", required=True, help="目录名或完整路径")
     a.set_defaults(func=cmd_show)
+
+    a = sub.add_parser("mark", help="给单片打「可发种」状态（★只写不读；不动 stage）")
+    a.add_argument("--pack", required=True)
+    a.add_argument("--set", required=True,
+                   help="取值: " + " / ".join(S.CAN_PUBLISH_VALUES))
+    a.add_argument("--dir", help="单片目录名或完整路径（单件）")
+    a.add_argument("--all-unmatched", action="store_true",
+                   help="批量：所有 stage=UNMATCHED 的件")
+    a.add_argument("--dry-run", action="store_true", help="只打印将改哪些，不写库")
+    a.set_defaults(func=cmd_mark)
     return p
 
 
