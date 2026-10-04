@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""回归：漂移哨兵对 `.env` 备份/变体的分类 —— **别再靠猜文件名**。
+r"""回归：漂移哨兵对 `.env` 备份/变体的分类 —— **别再靠猜文件名**。
 
 钉住的现场（2026-09-13）
 -----------------------
@@ -20,6 +20,14 @@
   · `.env`           —— 本体，必须落在上一条「真实凭据」，**不许**被杂物吃掉；
   · `.env.example`   —— 模板，压根不部署，**不许**归进杂物；
   · 其余 `.env.` / `.env_` 前缀的，**都**该归进杂物。
+
+★★ 2026-10-05（#37 现场）：上面那条「其余 `.env.` / `.env_`」原先**只锚根**
+  （`^\.env[._]`），于是 `子目录/.env.<后缀>`（实测：`.fix-backup/<ts>/.env.before_torznab`，
+  **一份含真凭据的副本**）**匹配不到** ⇒ 既没被当凭据报（ALERT 不响）、又掉进"未知"。
+  ⇒ 已放宽成 `(^|/)\.env[._]`（**任何一层**），并在此补 13/14/15 三条把
+     「子目录 env 副本算杂物且带告警」「子目录 `.env.example` 仍不归杂物」钉住。
+  同批还登记了 #37 的另两类**过程残留**（`.deploy-backup/`、`.fix-backup/`、`*.bak-<后缀>`）——
+  它们此前全掉进"未知"（哨兵报 9 个），见 16–19。
 """
 import importlib.util
 import pathlib
@@ -119,6 +127,26 @@ check_alert(10, "下划线变体也带", ".env_bak", True)
 # 11) `__pycache__` **不许**带 —— 它是字节码，不是凭据。带上了就等于天天喊狼来了
 check_alert(11, "字节码不带告警", "drive-loop/scripts/__pycache__/x.cpython-312.pyc", False)
 
+# ★★ 2026-10-05（#37 现场）：`.env` 副本**在子目录里**也算凭据。
+#   旧规则 `^\.env[._]` 只锚根 ⇒ `.fix-backup/<ts>/.env.before_torznab`
+#   既不被当凭据报、又掉进"未知"。这条把「凭据在子树里」钉住。
+check(13, "子目录 env 副本算杂物", ".fix-backup/b6-20261005-002837/.env.before_torznab", "clutter")
+check_alert(14, "子目录 env 副本带告警", ".fix-backup/b6-20261005-002837/.env.before_torznab", True)
+
+# 15) 子目录里的 `.env.example` 仍**不许**归杂物（负向前瞻要跨目录仍然成立）
+check(15, "子目录模板不归杂物", "data/x/.env.example", "unknown")
+
+# ★★ 2026-10-05（#37）：部署/修复备份目录 → 杂物（该清，但先登记，别误报未知）
+check(16, ".deploy-backup 归杂物", ".deploy-backup/20261004-193950/compose.yaml", "clutter")
+check(17, ".fix-backup 归杂物", ".fix-backup/b6-20261005-002837/p.sh.legacy", "clutter")
+
+# ★★ 2026-10-05（#37）：`*.bak-<后缀>` 备份（后缀是时间戳或 git sha）→ 杂物
+check(18, "bak-时间戳 归杂物", "build-farm.sh.bak-2026-10-05", "clutter")
+check(19, "bak-shasum 归杂物", "compose.yaml.bak-cb2caeb", "clutter")
+
+# 20) 反向：`.env.bak-*` 仍优先撞 ALERT（凭据优先），不是落到普通 bak 规则
+check_alert(20, "env bak- 仍带告警", ".env.bak-2026-10-05", True)
+
 # 12) ★ 反向结构检查：ALERT 只能打在「杂物」上。
 #     打在某条非杂物规则上，那段 if alert_items 永远不会触发 ——
 #     一条"看着像装好了告警、其实从不响"的路，正是本文件 2–3 行那段要防的形状。
@@ -136,5 +164,5 @@ print()
 if fails:
     print("FAIL：第 %s 项不过（测试自己也可能错，先看 want/got）" % fails)
     sys.exit(1)
-print("ok：12/12 通过")
+print("ok：20/20 通过")
 sys.exit(0)

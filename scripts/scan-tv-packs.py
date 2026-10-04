@@ -61,6 +61,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+# ★★ 2026-10-05 修：结构重构（B2/B3）把 `orchestrator` 源码收进了 `data/`
+#   ⇒ 只插仓库根**import 不到**（`ModuleNotFoundError: No module named 'orchestrator'`）。
+#   ★ 这个洞只在**独立跑**本脚本时现形 —— `tests/test_scan_tv_packs.py` 自己插了
+#     `data/`（见那里），所以测试一直是绿的，掩盖了它（"测试绿 ≠ 脚本能跑"的形状）。
+#   与 `reseed-freeze-report.py` / `audit-found-*.py` 同一处理：把 `data/` 也插进去。
+sys.path.insert(0, str(REPO / "data"))
 
 from orchestrator import state as S  # noqa: E402
 

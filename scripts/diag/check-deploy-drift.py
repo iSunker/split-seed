@@ -173,16 +173,43 @@ KNOWN_NAS = [
     #   ★★ 处置建议（`--cleanup` 的规矩：只 mv 不 rm）：搬进 `_cleanup-<日期>/` 再删。
     #     记录在案是为了**它长得像"真库"**这件事本身值得留痕（同 `ERR-SQL-04` 的形状：
     #     0 字节的 state.db 会伪装成「一部都没登记」）。
-    (r"^drive-loop/state\.db$",                   "★ 0 字节孤儿库（真库在 drive-loop/hlink/state.db；成因已堵）"),
-    (r"^prowlarr/",                               "站点 cookie + Prowlarr 库"),
-    (r"^cross-seed/cross-seed\.db.*",             "cross-seed 库（含 -wal/-shm）"),
-    (r"^cross-seed/cross-seeds/",                 "cross-seed 硬链接产物"),
-    (r"^cross-seed/logs/",                        "cross-seed 日志"),
-    (r"^cross-seed/torrent_cache/",               "cross-seed 种子缓存"),
-    (r"^drive-loop/hlink/",                       "从本地一次性迁移过去的 state.db"),
-    (r"^drive-loop/attempts\.log$",               "批次台账（NAS 上追加写）"),
-    (r"^drive-loop/scripts/drive-loop\.log$",     "驱动日志"),
-    (r"^drive-loop/scripts/\.[^/]+\.state$",      "心跳 / --once 闸门 / 巡检状态"),
+    # ★★★ 2026-10-05（修死规则）：下面这一整块原先**没有 `data/` 前缀** ——
+    #   而结构重构（`1e7c8cc`）把 cross-seed/prowlarr/drive-loop 的**运行时**全收进了 `data/`
+    #   ⇒ 这些规则**匹配不到任何文件**（死规则）。死规则比缺规则更坏：它看起来"已经登记了"，
+    #   于是没人再去看一眼（同本文件上方删 `deploy.sh` 那条的教训）。
+    #   ★ 现场症状：`--nas` 报 **1694 个「未知」** —— 全是 `data/cross-seed/`(1020)、
+    #     `data/prowlarr/`(638)、`data/drive-loop/state/`(10) 这些**完全正当**的运行时数据。
+    #   ★ 「常红的闸门 = 没有闸门」：一个天天报 1694 条噪音的哨兵，真报出漂移时那条
+    #     会淹在噪音里没人看。⇒ 必须把前缀补对，让哨兵重新只报**真**异常。
+    #   ★ 实测复核（2026-10-05，拿 NAS 上 1707 个文件逐条比对）：
+    #     补前缀前 unknown=**1694**；补前缀后 unknown=**9** —— 且那 9 个**全部**是
+    #     「备份目录 / 备份文件」（`.deploy-backup/`×2、`.fix-backup/`×5、
+    #     `build-farm.sh.bak-*`、`compose.yaml.bak-*`），归 #37/#39 处置，**与本块无关**。
+    #     ⇒ 本块（运行时数据）改对了：它认下的 1671 个文件里再没有一个是被虚报的。
+    #   ★ 判死方式（本文件没有、也不必加）：`KNOWN_NAS` 管的是 **NAS** 上的文件，
+    #     本机清单判不了（`test_drift_lists.py` ③ 只做语法 + 非空匹配检查）——
+    #     所以这类"前缀搬了家"的漂移**只能靠人跑一次 `--nas` 看出来**。
+    #     ★★ 教训（值得单独记）：一块规则**整体**指错前缀（这里指了 6 条）不会
+    #     触发任何本机闸门 —— 它们语法都对、都非空匹配。**唯一**能抓到它的，
+    #     是有人真去跑一次 `--nas` 并**看那个数**。所以「定期跑 `--nas`」这件事
+    #     本身就是本哨兵的一部分，不是可选项。
+    (r"^data/prowlarr/",                          "站点 cookie + Prowlarr 库（B2 后收进 data/）"),
+    (r"^data/cross-seed/cross-seed\.db.*",        "cross-seed 库（含 -wal/-shm）"),
+    (r"^data/cross-seed/cross-seeds/",            "cross-seed 硬链接产物"),
+    (r"^data/cross-seed/logs/",                   "cross-seed 日志"),
+    (r"^data/cross-seed/torrent_cache/",          "cross-seed 种子缓存"),
+    (r"^data/hlink/",                             "从本地一次性迁移过去的 state.db"),
+    # ★ 运行态卷（compose 把 `./data/drive-loop/state` 挂成容器内 `/state`，见 compose drive-loop 段）：
+    #   6 个 `.state` + attempts.log + drive-loop.log + hlink/state.db 都在这里。
+    (r"^data/drive-loop/state/",                  "drive-loop 运行态卷（容器内 /state：心跳/日志/真 state.db）"),
+    (r"^data/drive-loop/state/hlink/",            "真 state.db（容器内 /state/hlink）"),
+    (r"^data/drive-loop/run\.sh$",                "drive-loop 宿主 `--once` 入口（DSM 任务计划调，**手工放 NAS**；不走受管集合）"),
+    # ★★ 2026-10-05（清 NAS 后登记）：`data/orchestrator/*` 与 `data/drive-loop/scripts/*.py`
+    #   是**旧模型**（SMB `deploy.sh` 白名单同步）推上去的**代码副本**；新模型改成
+    #   「代码走 Docker Hub 镜像」⇒ 容器只读 `/app`，**不再需要** NAS 上这份。
+    #   ★ 已按 `--cleanup` 规矩 `mv` 进 NAS 的 `_cleanup-<日期>/`（**绝不 rm**）。
+    #   ★ 故意**不**给它们写 KNOWN_NAS 规则：留成"未知"⇒ 将来谁再同步一份上去，
+    #     哨兵会**立刻报出来**（这正是我们要的回归网）。所以这里不是漏登，是**故意留白**。
     # ★★ 2026-09-18 加：`write_state()` 的**原子写临时文件**。
     #   写成 `<原名>.tmp`（`.drive-loop.state.tmp`）⇒ 上面那条（要求 `.state` 结尾）
     #   **匹配不到**，于是「扫的那一刻正赶上 os.replace 之前」就会被报成未知文件。
@@ -233,8 +260,36 @@ KNOWN_NAS = [
     #   这里按 `.env.` / `.env_` 两种前缀全兜，只排掉 `.env.example`
     #   （它是模板、**压根不部署**，见下面 LOCAL_ONLY；排掉只为分类语义干净）。
     #   `.env` 本体不受影响 —— 它在上面那条 `^\.env$` 就命中了，**先匹配先赢**。
-    (r"^\.env[._](?!example$)",                 "杂物·.env 备份/变体", ALERT),
+    # ★★ 2026-10-05（修：**只锚根 → 改成任意层**）：原先写作 `^\.env[._]`，**只认根**。
+    #   现场反例：`.fix-backup/b6-…/.env.before_torznab` —— 一份**含真凭据**的 `.env`
+    #   副本躺在**子目录**里，旧规则**匹配不到** ⇒ 它既没被当凭据报（ALERT 不响），
+    #   又是个"未知文件"。**凭据在子树里就不算凭据了？** —— 这正是本文件反复吃的
+    #   「判据指向了错的对象」那个形状（同 `.env*` 忽略规则当年只写 `.env` 的错）。
+    #   ⇒ 把 `^` 放宽成 `(^|/)`：**任何一层**下的 `.env.`/`.env_` 变体都算凭据副本。
+    #   ★ `.env.example` 仍被负向前瞻排掉（它压根不部署）；`^` 换 `(^|/)` 不改变
+    #     根目录那一族的行为（根的 `^` 也属于 `(^|/)`，先匹配先赢的顺序不变）。
+    (r"(^|/)\.env[._](?!example$)",            "杂物·.env 备份/变体（含子目录里的副本 —— 一样含真凭据）", ALERT),
+    # ★★ 2026-10-05（#37）：`*.bak-<后缀>` 备份文件。名字后缀是**时间戳**（`2026-10-05`）
+    #   或 **git 短 sha**（`cb2caeb`）—— 两种都见过，且都由**手工推/修**或
+    #   `rotate-*-key.py`（`db.name + ".bak-" + 时间戳`）产生 ⇒ 是**会复发**的形状，必须登记。
+    #   ★ 为什么不写死某一个：`.env.bak-2026-10-05` / `build-farm.sh.bak-2026-10-05` /
+    #     `compose.yaml.bak-cb2caeb` 三种后缀各不相同 —— 按"`*.bak-` 尾巴"兜，别猜后缀。
+    #   ★ 旧那条 `^build-farm\.sh\.bak\..*`（**点**后缀）保留：它是另一形（`.bak.`），
+    #     不能合并 —— 合并就得写 `\.bak[.-]`，那会把 `.bak` 裸名之类放开（同族取舍见上面）。
+    #   ★ 顺序：本条**在** `.env` ALERT 之后 ⇒ `.env.bak-*` 仍先撞 ALERT（凭据优先），
+    #     普通 `*.bak-*` 才落到本条。两条都进 `杂物`，与前缀先赢的语义一致。
+    (r"\.bak-[^/]+$",                             "杂物·旧文件备份（`*.bak-<时间戳|git sha>`；手工推/修或 rotate-*-key.py 产）"),
     (r"^build-farm\.sh\.bak\..*",                 "杂物·旧脚本备份"),
+    # ★★ 2026-10-05（#37）：**部署/修复过程的备份目录**。两个都来自**手工步骤**，
+    #   不是任何脚本常驻产出（已 grep 全仓零引用）：
+    #     · `.deploy-backup/` —— 旧 `deploy.sh` 覆盖生产前的备份（`.gitignore:105` 也忽略它）；
+    #       最新一个子目录（`20261004-193950`）是**本轮 SSH 直推**那步手工建的。
+    #     · `.fix-backup/` —— `.env`/config 修复前的备份（`重构方案.md:503` 记的过程）。
+    #   ★ 归 `杂物`（不是长期件）：它们是**过程残留**，确认无碍即可在 NAS 上删掉整目录。
+    #   ★ 为什么不用 `--cleanup` 自动搬：它们**在根目录下**（不在暂存区里），
+    #     而这两条规则的语义是"该清"—— 由人来决定何时清（同 `_cleanup-*` 那条的取舍）。
+    (r"^\.deploy-backup/",                        "杂物·旧 deploy.sh / 手工推的部署备份（可整目录删）"),
+    (r"^\.fix-backup/",                           "杂物·修复过程备份（含 .env 副本 ⇒ 见上方 ALERT；可整目录删）"),
     (r"^notify/probe-artifacts-[^/]*/",           "杂物·一次性探测产物"),
     (r"(^|/)__pycache__/",                        "杂物·python 字节码"),
     (r"^_cleanup-[0-9]{8}/",                      "杂物·本哨兵 --cleanup 暂存区（确认后在 NAS 上整个删掉）"),
