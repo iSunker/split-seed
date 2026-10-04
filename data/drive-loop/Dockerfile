@@ -86,12 +86,24 @@ COPY data/drive-loop/run-resident.sh /app/run-resident.sh
 #     改成"代码入镜像"后**第一次**由 `COPY` 直接把工作树字节搬进镜像 ⇒ 踩中。
 #   ★ 判据（能被证伪）：`docker run --rm --entrypoint sh <img> -c 'cat -A /app/run-resident.sh | grep -c "\^M"'` == 0。
 #   只对 shell 脚本做（python 不在乎行尾，但一并剥掉更一致、也少一个口径）。
-RUN for f in /app/run-resident.sh /app/scripts/*.sh /app/scripts/*.py; do \
+#
+# ★★ 2026-10-05（B6-fix4 实测）：本闸门**曾经是个假阳性炸弹**，必须这样写才免疫。
+#   原写法 `grep -rlU $'\r' …` 依赖 **bash 的 ANSI-C 引号** `$'\r'`；而本 RUN 跑在
+#   `sh` = **dash**（Debian/Ubuntu 系 `/bin/sh` 都链到 dash）里，**dash 不认 `$'…'`**：
+#   它把 `$'\r'` 展开成**三个字面字符 `$` `\` `r`**（实测 `printf '%s' $'\r'` → `$\r`）。
+#   于是 grep 实际搜的是 BRE `$\r` = 「`$`（在 BRE 里只有置于**末尾**才是行尾锚，此处是
+#   字面 `$`）后跟 `r`」⇒ **凡含 `$r` 的脚本都命中**（如 `$rel` / `${rel}`）。
+#   ⇒ 症状：文件**一个 0x0D 都没有**（python 逐字节数过），闸门却报「CRLF 未清干净」并退 1。
+#   ★ 触发条件：只要喂进来的文件里有 `$r` 两连（本次深源代码 `$rel` 就是），必炸。
+#   ★ 修法：不靠 `$'…'` —— 用 `printf '\r'` 造出**真正的 CR 字节**再比，POSIX/dash 通吃。
+RUN printf '\r' > /tmp/.CR; \
+    for f in /app/run-resident.sh /app/scripts/*.sh /app/scripts/*.py; do \
         [ -f "$f" ] && sed -i 's/\r$//' "$f"; \
     done; \
-    if grep -rlU $'\r' /app/run-resident.sh /app/scripts/ 2>/dev/null | grep -q .; then \
+    if grep -rlUF /tmp/.CR /app/run-resident.sh /app/scripts/ 2>/dev/null | grep -q .; then \
         echo "CRLF 未清干净"; exit 1; \
-    fi
+    fi; \
+    rm -f /tmp/.CR
 
 # 默认只打印用法，不真跑（真跑用 `docker compose run --rm drive-loop …`）
 ENTRYPOINT ["python", "/app/scripts/drive-loop.py"]
