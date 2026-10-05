@@ -199,7 +199,7 @@ reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-se
 > **`prowlarr-indexerstatus.py`** / **`check-indexer-timestamps.py`**（查限流是哪一种）几个用途，
 > 见「⛔ 电脑端已不参与」。
 > `tests/` 是**离线自测** —— ★ **脚本数与断言数只维护在 `tests/README.md`，别在这里抄第二份**
-> （抄过一次就漂了：这里曾写「13 个脚本 / 431 条断言」，而 2026-09-14 实测已是 **21 / 757**）。
+> （抄过一次就漂了）。当前数字看那份的生成区。
 > 原先散在 `D:/tmp` 里**没有版本管理**，2026-09-12 搬进仓库。不联网、不碰生产、不碰真库，
 > `python tests/<名字>.py` **任一 cwd** 都能跑（路径按 `__file__` 解析），全过退出码 0。
 > 见 `tests/README.md`。
@@ -295,10 +295,11 @@ python scripts/diag/gen-datadirs.py "//<NAS>/video/download/TV" --level 2 \
 MSYS_NO_PATHCONV=1 python scripts/diag/check-datadirs-names.py
 ```
 
-★ 退出码：`gen-datadirs.py` 拒生成 = **`3`**；`check-datadirs-names.py` 命中 = **`1`**。
-★ **两个工具引用同一份清单**（`datadirs_rules.py`）⇒ 不会出现"生成器放行、校验器报红"。
+★ 退出码：`gen-datadirs.py` 拒生成 = **`3`**；`check-datadirs-names.py` 命中 = **`1`**
+（逐条判据被测试钉住：`tests/COUNTS.json::notes[test_datadirs_names.py]`）。
 ★ 本机（Git Bash）跑校验器**必须带 `MSYS_NO_PATHCONV=1`** —— 否则以 `/` 开头的参数
-会被改写成 `C:/Program Files/Git/…`，**打印出来的路径不是你的输入**。
+会被改写成 `C:/Program Files/Git/…`，**打印出来的路径不是你的输入**
+（同上锚）。
 
 > ★ **为什么这条"生成侧也挡"很重要**：原先挡板只在**事后**的校验器里
 > ⇒ 正确顺序「先 `--list` 看一眼、再粘进 `.env`」中，那个**看一眼的工具本身不挡**，
@@ -450,11 +451,10 @@ docker compose run --rm reseed-orchestrator status                          # �
   修法（`pack.farm_root` 列 + `reseed-state.py farm` 子命令）与验证（**`SEEDING` 21 → 201**）见 **SUMMARY §17.5.1**。
   ⚠ 光补跑 `sync` **治不了这个** —— 实测只从 13 回到 21。当时的误判过程见 §17.3。
 - **`backoff_hits` 一直是 0，但索引器状态明明是 `RATE_LIMITED`**：
-  检查间隔（`--check-every` × `--interval` = 10 × 30s = **300 秒**）**比实测的退避窗口（30~60 秒）还长**，
-  窗口整段落在两次检查之间 → 既不等待也不计数。
   ✅ 已修：加 `--backoff-check-secs`（默认 60）**按秒**触发检查，并按 `retry_after` 变化认定「新发生了一次退避」。
-  ★ 连带修掉一个更隐蔽的：`next_sleep()` 的在 `--once` 模式下**压根没接线**（结论只进日志），
-  所以「站点在退避就缓一缓」这条策略**从来没生效过**。见 **SUMMARY §17.5.2~§17.5.4**。
+  相关取值：检查间隔 `--check-every` × `--interval` = 10 × 30s = **300 秒**，`--max-wait` **1800**。
+  失效机制（窗口整段落在两次检查之间 ⇒ 既不等待也不计数）见
+  `tests/COUNTS.json::notes[test_backoff.py]` / `notes[test_next_sleep.py]`；见 **SUMMARY §17.5.2~§17.5.4**。
 - **`attempts.log` 里出现 `exit=127 (no python: /usr/bin/python3)`，但同一批的 python 明明跑完了**：
    **那是假象** —— 旧的 `deploy.sh`（**现已删除**）曾在脚本**运行中**覆盖它（`sh` 边读边执行，会从旧偏移读到新内容）。
    `deploy.sh` 当时已改成**原子替换**（写 `.new` 再 `mv`，换 inode），并在检测到批次在跑时给出告警；
@@ -476,11 +476,8 @@ docker compose run --rm reseed-orchestrator status                          # �
    > ```bash
    > python scripts/diag/prowlarr-indexers.py --torznab
    > ```
-   > ★★ **不要用 `curl ... /api/v1/indexer`**：那个端点的响应**每一条都带 `fields`**
-   > —— 里面有 cookie / passkey。裸跑它（哪怕只为"看一眼结构"）等于把全部站点的
-   > 凭据打到终端上，**而终端输出会进聊天、进日志、进截图**。
-   > 这个脚本打的是**同一个端点**，但**只取 `id` / `name` / `enable`**，
-   > 所以它那一行输出可以安全粘贴。详见 `ENVIRONMENT.md` `ERR-SVC-02`。
+   > ★★ **不要用 `curl ... /api/v1/indexer`**（判据与原因被测试钉住：
+   > `tests/COUNTS.json::notes[test_prowlarr_indexers.py]`）。详见 `ENVIRONMENT.md` `ERR-SVC-02`。
    > 详见 SUMMARY §6.6。
 3. 把它的 Torznab 地址追加进 `.env` 的 `TORZNAB_URLS`，**逗号分隔、单行**（`scripts/diag/add-indexers.py` 已自动化这步，会自动补 `/api`、只改一行、自动备份）：
    ```
