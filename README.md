@@ -106,7 +106,7 @@ qB recheck **不通过时不报错**，而是**就地重下**那几个 piece。�
 | **想知道 NAS 上有没有我不知道的文件** | **`ENVIRONMENT.md` `A.17.1`**（漂移哨兵）← `python scripts/diag/check-deploy-drift.py` |
 | **想推代码，但怕把密钥一起推上去** | **`ENVIRONMENT.md` `A.17.2`**（推前凭据扫描）← `python scripts/diag/scan-secrets.py`（绿了再 `git push`） |
 | 加站 / 换站 | **多站点** → SUMMARY §13.3（完整流程，可复用） |
-| 让它出事了主动通知我 | ★ **本仓已不含通知写侧**（2026-10-05 砍掉）—— 见**独立通知项目**；链路参考 `ENVIRONMENT.md` `A.18`（历史） |
+| 让它出事了主动通知我 | ★ **本仓已不含通知写侧**（2026-10-05 砍掉）—— 见**独立通知项目**；链路见该项目的 `ARCHIVE-A18-reseed通知链路.md` |
 | **下一步该做什么** | **`summary/26-跨会话任务盘面与旧会话清场.md`** 的 `§26.2`（主表）+ `§26.2.3`（三张总表） |
 | 下一步还能自动化什么 | **SUMMARY §16**（四条预案 + **两条前提被推翻**；原「还没做」第 7 条，2026-09-19 改指） |
 | **判「能不能建硬链接」/ 某共享在哪个卷 / 某共享 SMB 里「看不见」** | **SUMMARY §23**（`docker_ssd ∈ /volume2` 的双来源复核 · ★★ **`stat -c %d` 只在 NAS 侧成立**，Windows/SMB 侧零分辨力 ⇒ 对照量用 `df` · **枚举 ≠ 全量**）· 判据本体在 `ENVIRONMENT.md` 的 `A.3` |
@@ -629,15 +629,16 @@ sh nas-update-env.sh --no-restart    # 只改不重启
 ## 通知 / 告警（NAS 侧发信）
 
 > ★★ **2026-10-05：本仓的通知写侧已整体砍掉**（`notify.py` / spool / `--notify*` 全删）。
->   要接邮件告警请用**独立通知项目**（`reseed-toolkit` 那份代码 + `ENVIRONMENT.md A.18` 的链路说明作参考），
+>   要接邮件告警请用**独立通知项目**（`reseed-toolkit` 那份代码 + 归档的链路说明作参考），
 >   **不要在本仓复活**。下面这节是**历史搬迁记录**，其描述的 spool 链路在本仓已不存在。
 
 > **本节已搬（2026-09-20，README 瘦身成 GitHub 门面）** —— **spool 分工 · 两条通道 · 每日摘要=心跳 · DSM 任务配置（含 `21:20` 勘误）· 通知开关** —— 已搬。
-> ★ 真相源：`ENVIRONMENT.md` 的 **`A.18` 通知链路与 DSM 任务**。
+> ★ 真相源：**独立通知项目** `nas里pt相关程序邮件通知告警项目\ARCHIVE-A18-reseed通知链路.md`
+>   （原 `ENVIRONMENT.md A.18`，2026-10-05 整体迁出）。
 > 
-### 两条通道 —— 只留锚（原文见 `ENVIRONMENT.md` `A.18.1.2`）
+### 两条通道 —— 只留锚（原文见归档 `ARCHIVE-A18-reseed通知链路.md` §A.18.1.2）
 
-#### NAS 侧一次性配置 —— 只留锚（原文见 ENVIRONMENT.md `A.18.1.4`）
+#### NAS 侧一次性配置 —— 只留锚（原文见归档 `ARCHIVE-A18-reseed通知链路.md` §A.18.1.4）
 
 > 原文可从 git 历史取回：`git show 94a3d0f:README.md`。
 
@@ -669,7 +670,7 @@ sh nas-update-env.sh --no-restart    # 只改不重启
 
 ### 怎么继续跑 —— 只留锚（原文见 ENVIRONMENT.md `A.19.1.6`）
 
-### 把调度挂到 NAS 上（✅ 已完成 —— 2026-09-12 凌晨）—— 只留锚（原文见 ENVIRONMENT.md `A.19.1.7`）
+### 把调度挂到 NAS 上（✅ 已完成 —— 2026-09-12 凌晨）—— 只留锚（原文见 ENVIRONMENT.md `A.19.1.6`；该小节已并入「怎么继续跑」）
 
 ### ⚠ 交接必读的坑 —— 只留锚（原文见 ENVIRONMENT.md `A.19.1.9`）
 
