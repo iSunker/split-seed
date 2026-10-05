@@ -462,111 +462,80 @@ ck("★ 缩回后再长回来 → **必须报**",
    [e[3] for e in events if e[0] == "alert"], ["unclaimed-searchee"])
 D.S.read_crossseed_db = _fake_read
 
-print("== ④ 声明点〔--packs〕：只报**变化**，不报现状（2026-09-12 深夜改） ==")
-# ★★ 这一格钉的形状照 2026-09-12 实测（NAS 只读）：`pack` 表 **3 行**
-#    （dc-collection / frds-top250-2024 / **mbf**）、`--packs` 默认只驱动**前两个**
-#    → 差集 = {`mbf`}。而 `mbf` 在 unclaimed / report / trend 上**全绿**：
-#    pack 表有行、movie 表有 4 行、farm_root 也有。抓不到它**不是判据算错了**，
-#    是**没有一条判据的输入源包含 `--packs` 的实际值**（§18.18 那个形状）。
-#    合成库里用 alpha/beta 复刻：登记 2 个、只驱动 1 个。
+print("== ④ 声明点〔pack 表〕：登记的包里**从没被搜过**的（2026-10-05 新判据） ==")
+# ★★ 关键：本节要测"首次读数" ⇒ 必须**清掉先前几节留下的 `_packs_baseline`**
+#    （上面 line ~410 那次 reconcile 已经写过一次基线 = {alpha,beta}）。
+#    不清的话"首读"会被误判成"与基线一致" —— 这一格本身就是"基线跨调用留存"的证明。
+def _clear_packs_baseline():
+    d = D._reconcile_read()
+    d.pop(D.PACKS_BASELINE_KEY, None)
+    D._reconcile_write(d)
+
+
+_clear_packs_baseline()
+# ★★ 旧判据是「`pack` 表 − `--packs` 名单」；名单退休后它还**恒为空**（摆设）。
+#    新判据问的是另一个**仍会红**的问题：登记的包里，有没有**一次都没被搜过**的
+#    （证据 = 该包**一条** `attempts>0` / `seeding_count>0` / `stage∈DONE` 都没有）。
+#    合成库里：alpha/beta 各登记一行 PENDING、attempts=0
+#    ⇒ 都是"从没被搜过" ⇒ 首读差集 = {alpha, beta}（=2）。
 #
-# ★★ 为什么改成「只报变化」：`mbf` 是**已接受的现状**，非空就发 alert 等于
-#    每天喊一次 —— 而噪音的代价是**真的出问题时没人看**。
-#    判据本身（差集算得对）没变，变的只是**出口的触发条件**。
+# ★★ 仍只报**变化**：现状不每天喊（噪音的代价 = 真出问题时没人看）。
 print("   ① 首次读数：记基线、**不告警**（现状不是新闻）")
 events.clear()
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None, packs="alpha,beta"))
-ck("首次读数：差集是 0", (m["packs_undriven"], m["packs_unreg"]), (0, 0))
+note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_A], db=db2, db_path=None))
+ck("首次读数：从没被搜过 = 2（alpha+beta）", m["packs_undriven"], 2)
 ck("★ 首次读数**不发** alert", [e for e in events if e[0] == "alert"], [])
 ck("正文说明白了这是首次", "首次读数" in note, True)
+ck("正文点名（只报数 = 换个地方藏）", ("alpha" in note and "beta" in note), True)
 
-print("   ② 差集**变大** → 告警（这才是新问题）")
+print("   ② 让 alpha 被搜过（attempts>0）→ **缩回**（修好了，静默但写出来）")
+# ★ 触发"被搜过"：给 alpha 的行一个 attempts>0 —— 这是最直接的"它被搜过"证据。
+st2.con.execute("UPDATE movie SET attempts=1 WHERE pack='alpha'")
+st2.con.commit()
 events.clear()
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None, packs="alpha"))
-ck("登记了没被驱动：计数", m["packs_undriven"], 1)
-ck("在名单里但没登记：0", m["packs_unreg"], 0)
-ck("正文点名那个包（只报数 = 换个地方藏）", "beta" in note, True)
-ck("★ 相对基线**有新增** → 发 alert",
-   [e[3] for e in events if e[0] == "alert"], ["packs-mismatch"])
-ck("告警标题说的是「变了」不是「对不上」", "变了" in events[0][1], True)
-ck("告警正文点名新冒出来的那个", "新增" in events[0][2] and "beta" in events[0][2], True)
-
-print("   ③ ★★ 同一个差集**再读一次** → 不许再喊（这就是「只报变化」）")
-# ★★ 这一格是整个改动的**核心断言**：没有它，「改了但没生效」和「改了且生效」
-#    长得一模一样。它同时也是 `mbf` 那个日常噪音的**回归钉子**。
-events.clear()
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None, packs="alpha"))
-ck("差集仍然是 1（判据照跑，没被跳过）", m["packs_undriven"], 1)
-ck("★★ 与基线一致 → **不发** alert", [e for e in events if e[0] == "alert"], [])
-ck("正文仍打印差集（不告警 ≠ 看不见）", "beta" in note, True)
-ck("正文说明了为什么不喊", "与基线一致" in note, True)
-
-print("   ④ 另一个方向：名单里有、库里没有 —— 比上一格更糟")
-# ★ 方向不同、后果不同：`pack` 表 − 名单 = 白登记（片子永远搜不到）；
-#   名单 − `pack` 表 = 状态机看不见它的片子，整包会被判成 other_pack 而静默降级。
-events.clear()
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None, packs="alpha,gamma"))
-ck("名单里的 gamma 库里没有", m["packs_unreg"], 1)
-ck("同时 beta 仍没被驱动", m["packs_undriven"], 1)
-ck("两个方向都打印了", ("gamma" in note and "beta" in note), True)
-ck("alert 仍是同一条 key",
-   [e[3] for e in events if e[0] == "alert"], ["packs-mismatch"])
-ck("★ 变化那一段点名的是**新增的** gamma",
-   "新增" in events[0][2] and "gamma" in events[0][2], True)
-
-print("   ⑤ 差集缩回 0 → 静默采纳（修好了不必喊）")
-events.clear()
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None, packs="alpha,beta"))
-ck("两个方向都是 0", (m["packs_undriven"], m["packs_unreg"]), (0, 0))
-ck("缩回到 0 → 不发 alert", [e for e in events if e[0] == "alert"], [])
-# ★★ 缩回也**必须写进正文**（2026-09-13 补）—— 上一版这里只会打一句「与基线一致」，
-#    而它明明是**少了** `beta`：**文案断言了一件没发生的事**。
-#    为什么非要写出来：不写的话，「那条差集被修掉了」和「判据今天没读到」在日报里
-#    长得一模一样 —— 而这两件事的处置完全相反（一个是收工，一个是去查故障）。
-#    ★ 触发点就是 #40（把 `mbf` 排进 `--packs` 正是一次缩回），所以这一格是它的回归钉子。
-ck("★★ 缩回要写出来：正文说「比基线少」", "比基线**少**" in note, True)
-ck("★★ 并**点名**少了谁（beta）", "少" in note and "beta" in note, True)
+note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_A], db=db2, db_path=None))
+ck("alpha 被搜过 ⇒ 从没被搜过的只剩 beta", m["packs_undriven"], 1)
+ck("缩回 → **不发** alert", [e for e in events if e[0] == "alert"], [])
+ck("★★ 缩回要写出来：正文说「比基线**少**」", "比基线**少**" in note, True)
+ck("★★ 并**点名**少了谁（alpha）", "少" in note and "alpha" in note, True)
 ck("★★ 缩回时**不许**说「与基线一致」—— 那是假话", "与基线一致" in note, False)
 
-print("   ⑥ ★★ 再长回来 → 必须报（这才是真该抓的：回归）")
-# ★ 这一格钉的是「**缩也要采纳新基线**」那条决定：如果缩的时候不更新基线，
-#   基线里还留着 beta/gamma，那它俩再冒出来时就会被判成"老样子"而**没人报**。
+print("   ③ ★★ 再长回来（新登记一个从没被搜过的包）→ 必须报（回归）")
+# ★ 钉「缩也采纳新基线」：缩的时候不更新基线的话，再冒出来就没人报。
+st2.upsert_pack("gamma", B_ROOT, roots=[B_ROOT], farm_root=FARM)
+st2.register_dirs("gamma", [("Movie.G", B_ROOT + "/Movie.G")])
+st2.con.commit()
 events.clear()
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None, packs="alpha"))
-ck("又变成 1", m["packs_undriven"], 1)
-ck("★★ 回归被抓住 → 又发 alert",
+note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_A], db=db2, db_path=None))
+ck("γ 从没被搜过 ⇒ 差集 = 2（beta+gamma）", m["packs_undriven"], 2)
+ck("★★ 回归被抓住 → 发 alert",
    [e[3] for e in events if e[0] == "alert"], ["packs-mismatch"])
+ck("★ 告警正文点名**新增的** gamma",
+   "新增" in events[0][2] and "gamma" in events[0][2], True)
 
-print("== ④ 没给 packs / 库读不到 → 必须 n/a，**且不许把基线抹掉** ==")
-# ★ 与 `fa` / `unclaimed` 同一条规矩：「调用方没传」和「名单对得上」在 TSV 里
-#   长得一模一样，事后就分不开。而且**两种都不许发 alert**（没跑到 ≠ 有信号）。
+print("   ④ 与基线一致 → 再读一次**不许**再喊")
+events.clear()
+note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_A], db=db2, db_path=None))
+ck("差集仍是 2", m["packs_undriven"], 2)
+ck("★★ 与基线一致 → **不发** alert", [e for e in events if e[0] == "alert"], [])
+ck("正文仍打印差集（不告警 ≠ 看不见）", ("beta" in note and "gamma" in note), True)
+ck("正文说明了为什么不喊", "与基线一致" in note, True)
+
+print("== ④ 库读不到 → 必须 n/a，**且不许把基线抹掉** ==")
+# ★ 与 `fa` / `unclaimed` 同一条规矩：读不到和"读到 0"在 TSV 里长得一样，事后分不开。
 events.clear()
 note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None))
-ck("库在但没给 packs：两个方向都 n/a",
-   (m["packs_undriven"], m["packs_unreg"]), ("n/a", "n/a"))
-ck("没给 packs：不发 alert", [e for e in events if e[0] == "alert"], [])
-
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=None, db_path=None, packs="alpha"))
-ck("库读不到：两个方向都 n/a（不是 0）",
-   (m["packs_undriven"], m["packs_unreg"]), ("n/a", "n/a"))
+    argparse.Namespace(log=[LOG_A], db=None, db_path=None))
+ck("库读不到：n/a（不是 0）", m["packs_undriven"], "n/a")
+ck("库读不到：不发 alert", [e for e in events if e[0] == "alert"], [])
 ck("库读不到：正文说清「没跑成」", "没跑成" in note, True)
 
-print("== ④ ★ 上面两轮 n/a 之后，基线**没被抹掉** ==")
-# ★ 这一格是 `packs_baseline is not None` 那行守卫的钉子：没有它，n/a 的两轮
-#   会把基线写成空，于是下一轮 `mbf` 这种老问题会被当成「新变化」再喊一遍 ——
-#   正是这次要消掉的那种噪音。
+print("== ④ ★ 上面那轮 n/a 之后，基线**没被抹掉** ==")
+# ★ 没有 `packs_baseline is not None` 那行守卫，n/a 会把基线写成空，
+#   于是 beta/gamma 这种老问题会被当成「新变化」再喊一遍 —— 正是要消掉的噪音。
 events.clear()
-note, m = D.reconcile_watch(
-    argparse.Namespace(log=[LOG_A], db=db2, db_path=None, packs="alpha"))
-ck("差集仍是 1", m["packs_undriven"], 1)
+note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_A], db=db2, db_path=None))
+ck("差集仍是 2", m["packs_undriven"], 2)
 ck("★★ n/a 之后仍是「与基线一致」→ **不发** alert",
    [e for e in events if e[0] == "alert"], [])
 

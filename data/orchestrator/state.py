@@ -1794,6 +1794,13 @@ class StateStore:
 
         返回 `[(pack, row, due_indexers), …]`，**已按池序排好、已按 `limit` 截断**。
 
+        ★★ 2026-10-05（去掉「包的闸门」）：`packs` 的**输入源**变了 —— drive-loop 不再传
+          `--packs`/`PACKS_DEFAULT` 的名单，而是传 `StateStore.packs()` 的**全部登记包**
+          （`[r["name"] for r in store.packs()]`，见 `drive-loop.py::pool_packs`）。
+          机制**一字未改**（仍旧"扫一个包名列表 → 全局排序 → 全局 limit"）—— 变的只是
+          "扫哪些包"。★ 名字仍叫 `packs`（不改签名）：`reseed-state.py` 也调它，
+            改参数名会波及那条路径（那是**显式点名**的合法用法，与"闸门"无关）。
+
         **为什么要有它**（用户原话：「一批多少种子不能按包定，三包合起来取 N 个」）——
         原先批次来源是**按包轮换**（`once_round` 的 `(last_pack_idx+1) % len(packs)`），
         每次只跑一个包，于是：

@@ -139,107 +139,78 @@ DEFAULT_DB = os.environ.get("RESEED_STATE_DB") or (
     else str(ROOT / "hlink" / "state.db")
 )
 
-#: `--packs` 的默认名单 —— 本仓库里**唯一**一处「哪个包会被驱动」的声明。
-#: ★ 之所以提成模块常量、而不是留在 argparse 那一行里：这个值同时被**两处**引用
-#:   —— argparse 的默认值，和声明点清单里的对账（`reconcile_watch` 的第四类）。
-#:   两处各写一份字面量就会漂；今天已经漂过一次同形状的（文档里写的
-#:   `drive-loop.py:1487` 被我加几行注释推成了 1510）—— 所以**按符号引用，不按行号**。
-#: ★ 它**不是**一行等着被"消除"的代码债，是一个产品决定 —— **2026-09-13 已拍（#40）**：
-#:   把 `mbf` 排进来，名单 2 → 3 个，dc/frds 各自的**轮换频率从 1/2 掉到 1/3**
-#:   （`once_round` 取模就是它）。
-#:   理由**不是**"mbf 可能命中"—— HDFans 上实测 4 个季包全 `Found 0 torrents`。
-#:   理由是**不排它 = 一个不可观测的盲区**：`pack` 表有行、`movie` 表有 4 行、
-#:   `farm_root` 也有，它在 unclaimed / report / trend 上**全绿**，
-#:   而"它到底能不能搜到"这件事**永远不会有读数**（§18.18 那个形状）。
-#:   ★ 而 2026-09-12 起 `HDtime` 新进了 `TORZNAB_URLS` —— mbf 从没在它上面搜过，
-#:     `UNMATCHED` 的规则是「出现没搜过的索引器 → 自动解锁」，所以只要 mbf
-#:     被驱动**一轮**，就能拿到那个此前拿不到的读数。
+#: ★★★ **2026-10-05「去掉包的闸门」（用户拍板）**：这里原本是一个模块常量
+#:   `PACKS_DEFAULT`（`--packs` 的默认名单，一度是 `frds-top250-2024`），
+#:   外加 compose 的 `DRIVE_PACKS` 覆盖口 —— **已整体退休**。
 #:
-#: ★★ **退出条件**（这是一次有条件的实验，不是新的长期名单）：
-#:   若 HDtime 上也 0 匹配 → 把 `mbf` 从本常量里移出，名单回到 2 个，
-#:   dc/frds 的频率**立刻**复原 1/2。代价是"几轮"，不是"永远"。
-#:   观测点：mbf 那一批自己的日志窗口（`Found … by <站>`）+ `state.db` 里
-#:   `pack='mbf'` 那 4 条 searchee 的 stage / indexer_seen。见 SUMMARY §20.9。
+#:   为什么要退休（用户原话）：「包只是个框架范围，把里面的全部单片硬链接到文件夹
+#:   里面，每一片做个登记就好了…每一片搜索过几次，记录下来，每个站搜索到一定数量
+#:   还匹配不上就移动到 14 天搜一次的慢队列去」。
+#:   **核查结论：这套流水线系统里已经全都有了** ——
+#:     · 包 = 范围声明（`pack` 表）　· 单片进农场 + 每片一行（`movie` 表）
+#:     · 匹配 → `SEEDING`/`MATCHED` → `DONE_STAGES` → 永久出待搜（`todo()`）
+#:     · 每片搜索次数、每片每站最后搜索时间（`movie.attempts` / `indexer_seen`）
+#:     · **14 天慢档 = `DEFAULT_CADENCE_DAYS`（`state.py:116`）**：搜过没命中 →
+#:       `UNMATCHED` → 按**片×站**记时间，够 14 天（或新增站点）才重新入队。
+#:   **唯一的问题**是驱动循环按"名单"逐个包轮换：**不在名单里的包 `todo(pack)`
+#:   根本不被调用** ⇒ 里面的片"连够没够 14 天都不会被问一次" ⇒ `dc-collection`
+#:   /`mbf` 被**冻住**（不是变慢，是停电）。2026-09-21 把它们移出名单读到的现象，
+#:   正是"包不驱动 = 永久不搜"。⇒ 去掉闸门：池子扫 **`pack` 表全部登记的包**。
 #:
-#: ★★★ **顺序**上的坑：`mbf` 排在这里（index 1，不是最末）是**刻意的** ——
-#:   这样「`last_pack_idx=0`」这个**已落盘**的读数**含义不变**（仍是"dc-collection
-#:   刚跑完"），而下一批就轮到 mbf ⇒ **一批**就拿到读数，排在最末要等两三批。
-#:   **代价**：`once_round` 存进 `.drive-loop.state` 的是**下标而不是名字**，
-#:   所以**改这个常量的顺序 = 偷偷改"下一批跑谁"**。要动顺序，先看 `last_pack_idx`。
-#: ★★★ **2026-09-21 已拍（用户）：名单缩回 1 个 —— `dc-collection` 与 `mbf` 移出。**
-#:   依据是**全窗口 9 天（09-12 → 09-20）的干净读数**（`notify/log/*.tsv` 实测）：
-#:
-#:   | 包 | 批数 | `ok` 合计 | `newly_seeding` 非零的日子 | 判 |
-#:   |---|---:|---:|---|---|
-#:   | `mbf` | 29 | 92 | ★ **从未** | `no-yield`（三条全中，证据最硬）|
-#:   | `dc-collection` | 67 | 2476 | 仅 09-12（-26/+25 各一次）| `no-yield`（此后 8 天零产出）|
-#:   | `frds-top250-2024` | 34 | 1236 | **多次（+443 等）** | ✅ 有产出，**留** |
-#:
-#:   ★★ 这**正是上面那段「退出条件」预先写好的事**，不是新决策：
-#:     原文「若 HDtime 上也 0 匹配 → 把 `mbf` 从本常量里移出，名单回到 2 个」——
-#:     实测 mbf 29 批 / ok=92 / **`newly_seeding` 一次非零都没有** ⇒ **条件成立**。
-#:   ★★ **`--pool` 从未开过**：全窗口 `pack=pool` 的批次 **0 条** ⇒
-#:     这两天的读数**本来就是干净的**，不存在"关池重采"这件事（我曾误判，见 §26.42）。
-#:   ★ `dc` 的 `ok` 恒在 **40** 附近（去重值里有 `50`）而它有 **78** 部 ⇒
-#:     这是 **`--limit` 在截断**，不是片子数 ⇒ `357 = 9 批 × ~40` 正常。
-#:
-#: ★★ **退出条件现在不成立了**（这段是给当初那次实验写的）：
-#:   移出后名单只剩 `frds` —— 若将来要按**新理由**把某个包排回来，
-#:   **必须新写一段理由**，别引用上面那段已过期的（`B.10`：理由也有保质期）。
-#:
-#: ★★★ **顺序坑（改名单前必看）**：`once_round` 落盘的 `last_pack_idx`
-#:   是**下标不是名字** ⇒ **改长度会改变"下一批跑谁"**。
-#:   实测当前 `last_pack_idx = 10`（★ 一个**越界脏值**，`% len(packs)` 会归一）：
-#:   - 旧名单 3 个：`(10+1)%3 = 2` ⇒ `frds-top250-2024`
-#:   - **新名单 1 个**：`(10+1)%1 = 0` ⇒ `frds-top250-2024`（✅ **仍是它，没跳**）
-#:   ⇒ 这次缩短**恰好**把下一批留在 `frds` 上，**没有偷偷改"下一批跑谁"**。
-#:   ★ 若当时 `last_pack_idx` 是别的值，就必须先把它改对再动名单。
-#:
-#: 变名单会漂的**第二处**：`docker-compose.yml` 的 `environment:` 里有
-#:   `DRIVE_PACKS: ${DRIVE_PACKS:-...}`，而 `--packs` 的默认要读它 ——
-#:   不然「本文件改了默认、容器却还按旧名单跑」是**静默**的
-#:   （入口脚本 `run-resident.sh` 不传 `--packs`，正是靠这条默认）。
-#:   ★ 与 `run-resident.sh` 那条「参数有了第二个声明点就要有判据」同形。
-#:
-#: ★★ **移出 ≠ 从 `pack` 表删行**：`dc`/`mbf` 仍在 `pack` 表里登记 ⇒
-#:   `reconcile_watch` 第四类「**登记了却没被驱动**」的差集将从 **0 变 2** ⇒
-#:   **会告警**（`packs_undriven`）。★ 那是判据在保护你（提示"白登记"），不是 bug；
-#:   要不要真的删那两行 `pack` 记录 —— **是另一个产品决定，本次不做**。
-#: ★★ 允许 compose 覆盖：`DRIVE_PACKS` 是**唯一的运行时可覆盖口**
-#:   （`docker-compose.yml` 的 `environment:` 传 `${DRIVE_PACKS:-...}`，两边默认值相同）。
-#:   ★ 为什么不用「启动时读一次快照」那把锁：`--pool` 下**名单变化不会误派** ——
-#:     池子是**扫名单**取件、`--limit` **全局**，名单里多一个包**不会**顶掉别的包的名额
-#:     （这正是合池要解决的问题本身）；非合池下才有"轮换频率被稀释"的代价。
-#:   ★ 为什么 `--pool` 下 `--limit` 从 50 抬到 **500**：池子是「每次从头取前 N」，
-#:     全池欠账实测 **565** 部 ⇒ 50 意味着**每批重跑同一批头部**（`§26.34` 一那笔
-#:     收益只在**第一批**成立）。500 让"一批 = 把全池清一遍"，之后每批自然只剩
-#:     真正**新到期**的片子。★ 代价：轮到"全轮空"那一天要去数**空闲轮**，否则
-#:     3 轮 × 45 分 = 2.25 小时后才判全完成 —— 而上界有 `--max-rounds` 兜着。
-#:   ★ **`--limit` 不是请求数上限**：`ok=40` 是"发出 40 条 webhook"，
-#:     每条 1 次搜索 ⇒ 50 与 500 都只是**每批最多取多少部片子**。
-PACKS_DEFAULT = os.environ.get("DRIVE_PACKS") or "frds-top250-2024"
+#:   ★ 旧注释里那段"名单顺序 = 偷偷改下一批跑谁"（`last_pack_idx` 下标坑）
+#:     连同那段 2026-09-13「为什么把 mbf 排进来」的实验理由，**一并删除** ——
+#:     它们描述的是一个**已经不存在的机制**（`b.10`：理由也有保质期）。
+#:   ★ 那两段里仍然**成立**的一条教训，已移到 `pool_packs()` 的 docstring：
+#:     "原始串 vs 包名列表"那个字形坑（2026-09-22 事故）—— 去掉名单后这个区分
+#:     连同它的入口**一起没了**。
+#:   ★ `--pool` 那个开关也删了（用户拍板）：池路径**就是唯一路径**，
+#:     `run.sh --once` 与常驻**共用同一套取池逻辑**，差别只在 `--once`/`--limit`。
+#:   ★ **注意**：池子不再是"每次从头取前 N、三包合起来"这种"合池"叙述 ——
+#:     现在没有"不合池"的对照物了，它就是**池**。`--limit` 是**全局**的。
+def pool_packs(st: "S.StateStore") -> list[str]:
+    """池子的**包源** = `pack` 表里**全部已登记的包**（`2026-10-05` 去掉「包的闸门」）。
 
-
-def packs_from_arg(spec: str | None) -> list[str]:
-    """把 `--packs` 的**原始字符串**（`"a,b"`）清洗成包名列表。
-
-    ★★★ 为什么必须是**函数**、不许各处自己写一遍
+    ★★★ 为什么不再有 `--packs` / `PACKS_DEFAULT` / `DRIVE_PACKS`
     ------------------------------------------------------------
-    2026-09-22 实测事故：`run_round` 里写的是 `list(args.packs)` —— 而 `args.packs`
-    是**字符串**，`list("frds-top250-2024")` 把包名**拆成了 16 个单字符**
-    ⇒ `WHERE pack='f'` 一个都匹配不上 ⇒ **池子恒为 0、连续 14 轮 / 7 小时全空**。
-    ⇒ 修的时候我在 `run_round` 里写了 `list(packs)`，而 `run_round` 的作用域里
-      **根本没有 `packs`**（它是 `main()` 的局部变量）⇒ 当场 `NameError`。
-    ★ 两次都栽在**同一件事**上：「`--packs` 的原始串」和「包名列表」是**两个东西**，
-      而它们的字面量长得一样。
+    可选的"包名单"（谁被驱动）**本身就是那道闸门**：名单外的包，其片子的 `stage`/
+    `indexer_seen` **一次都不会被问**（`todo(pack)` 压根没被调用）⇒ 不是"变慢"，
+    是**停电**。用户 2026-09-21 把 `dc-collection`/`mbf` 移出名单，读到的现象正是
+    "包不驱动 = 永久不搜"。去掉闸门后，取件语义变成「每片自己的 `stage` +
+    `indexer_seen` 说了算」—— 登记（`pack` 表有行）即被驱动，无需第二处名单。
 
-    ⇒ 所以把它提成**唯一一处**转换点：谁要包名列表，就调它。
-      于是"这里是字符串还是列表"不再靠记性，而靠**这个函数名**。
-      ★ 同 `A.11`「同一事实只在一处维护」：`--packs` 的**解析**也只在这一处。
-      ★ 与 `PACKS_DEFAULT` 那条注释同形：那个常量解决"默认值两处各写一份会漂"，
-        本函数解决"**解析**两处各写一份会漂"。
+    ⇒ 于是 `PACKS_DEFAULT`（默认值会漂）、`packs_from_arg`（解析会漂，见它原 docstring
+      里那段 2026-09-22 事故）、`DRIVE_PACKS`（compose 覆盖口）**整体退休**：
+      少了"原始串 vs 包名列表"这个区分，那个字形坑连同它的入口**一起没了**。
+
+    ★ 枚举口**只有一处**：`StateStore.packs()`（`SELECT * FROM pack ORDER BY name`）。
+      ★ 空表 ⇒ 池恒空 ⇒ 会**假报**「🎉 全干完」（同 2026-09-22「静默算空」形状）
+        ⇒ 调用方须先过 `require_packs()` 守卫，别把这句当"没东西可搜"咽下去。
     """
-    return [p.strip() for p in (spec or "").split(",") if p.strip()]
+    return [r["name"] for r in st.packs()]
+
+
+class NoPacksRegistered(RuntimeError):
+    """`pack` 表为空 —— **不是**"全都搜完了"，是"登记缺失/库读错"。
+
+    ★★ 为什么必须**显式区分**这两个：`alert_if_all_done` 判的是"池子空"，
+      而空池有**两种成因**，后果完全相反：
+        · 真有欠账但都到期了、都搜完了 → 🎉 里程碑，该发日报
+        · `pack` 表**一行都没有**（读错库 / 库被清 / 路径退化）→ **故障**，
+          该立刻报错，绝不是"全干完"
+      两者的读数**都是 0**，合成一个数就是又一个「`n/a` = 0 = 没事」（`ERR-AI-03`）
+      —— 2026-09-22 那次"池子恒 0、连空 14 轮"正是这个形状（当时成因是名单被拆成
+      单字符，现在是表空）：**静默**、日志看着正常。⇒ 表空就直接抛，别咽下去。
+    """
+
+
+def require_packs(st: "S.StateStore") -> list[str]:
+    """取池源，**并守卫"表非空"**；空表 ⇒ 抛 `NoPacksRegistered`（不静默算空）。"""
+    names = pool_packs(st)
+    if not names:
+        raise NoPacksRegistered(
+            "`pack` 表里没有任何已登记的包 —— 池子恒空，这不是「全干完」。"
+            " 排查：① `--db` 是否指对库（state.db）；② 是否漏跑 `reseed-state.py init`。")
+    return names
 
 
 # --------------------------------------------------------------------------- #
@@ -553,29 +524,37 @@ def update_abort_streak(prev: tuple[int, int], stats: S.DriveStats | None, *,
     return n, backoff
 
 
-def alert_if_all_done(packs: list[str], db: str) -> bool:
-    """所有包都没有待搜项 → 大声报告"干完了"（否则循环静默退出，没人知道）。"""
+def alert_if_all_done(pack_count: int, db: str, packs: list[str]) -> bool:
+    """所有登记的包都没有待搜项 → 大声报告"干完了"（否则循环静默退出，没人知道）。
+
+    ★★ 2026-10-05（去掉闸门后改）：判据从"按**名单**数每包"改成"按 **`pack` 表全部
+       登记的包**数"。`pack_count` = `pack` 表行数（= 池源包数）；`packs` 仅用于
+       日志/事件里的名字列举。
+    ★ 空池（`pack_count == 0`）**不到这里**：那是"表空"故障，已由 `require_packs()`
+      在**取池之前**拦下并抛 `NoPacksRegistered` —— 本函数只处理"有表、但都没待搜"。
+    """
+    remaining = 0
     st = S.StateStore(db)
     try:
-        remaining = sum(1 for p in packs
-                        for r in st.movies(p) if r["stage"] not in S.DONE_STAGES)
+        for p in packs:
+            remaining += sum(1 for r in st.movies(p) if r["stage"] not in S.DONE_STAGES)
     finally:
         st.con.close()
     if remaining:
         return False
     LOG.warning("=" * 62)
-    LOG.warning("🎉 所有包均无待搜项 —— 自动循环已无事可做。")
+    LOG.warning("🎉 所有登记的包均无待搜项 —— 自动循环已无事可做。")
     LOG.warning("   计划任务可保留（新片/新站接入后会自动变回待搜），")
     LOG.warning("   或手动停掉：schtasks /Delete /TN \"reseed-drive-loop\" /F")
     LOG.warning("=" * 62)
     # ★ 归到 batch（进每日摘要），不归 alert：这是**里程碑**，不是故障。
     #   按「坏消息立刻发 + 每日摘要」的分工，它应该出现在日报里而不是半夜的告警里。
     #   固定 key + 冷却：全干完之后每次唤醒都会走到这里，不冷却会刷屏。
-    emit("batch", f"全部包已无待搜项（{len(packs)} 个包）",
-         body=("所有包的片子都已经搜过/做种，自动循环已无事可做。\n\n"
+    emit("batch", f"全部登记的包已无待搜项（{pack_count} 个包）",
+         body=("所有登记包的片子都已经搜过/做种，自动循环已无事可做。\n\n"
                "  计划任务可以保留 —— 接入新站或新增片子后会自动变回待搜；\n"
                "  也可以停掉：schtasks /Delete /TN \"reseed-drive-loop\" /F\n"),
-         key="all-done", metrics={"packs": len(packs)})
+         key="all-done", metrics={"packs": pack_count})
     return True
 
 
@@ -1635,15 +1614,42 @@ def _unclaimed_norm(d) -> list:
     return sorted(x for x in (d if isinstance(d, list) else []) if x)
 
 
+def _pack_never_searched(store, pack: str) -> bool:
+    """这个包**从没被搜过一次**吗？（`2026-10-05` 声明点对账的新判据）
+
+    「被搜过」的证据（`movie` 表逐行看，任一成立即可）：
+      · `attempts > 0`        —— 搜索次数记过（哪怕全 FAILED/SKIPPED）
+      · `seeding_count > 0`   —— 正在做种（搜到并挂上了）
+      · `stage ∈ DONE_STAGES` —— SEEDING / MATCHED
+    三者皆无 ⇒ 从没被搜过（"白登记"）。
+
+    ★ 只读、绝不抛（对账挂在每天一次的日报里，见 `reconcile_watch` 的规矩），
+      但**不吞异常**：读库出错由调用方的 try/except 统一记 `算不出` —— 这里若
+      自己 try 成"没被搜过"，就会把"读失败"误报成"白登记"（`ERR-AI-03` 那个形状）。
+    ★ 包在 `movie` 表里**一行都没有**时，`movies()` 返回空 ⇒ 循环不执行 ⇒ 返回
+      `True`（从没被搜过）—— 这正是要报的：登记了却没有 searchee 行。
+    """
+    for r in store.movies(pack):
+        if (r["attempts"] or 0) > 0:
+            return False
+        if (r["seeding_count"] or 0) > 0:
+            return False
+        if r["stage"] in S.DONE_STAGES:
+            return False
+    return True
+
+
 def _packs_norm(d) -> dict:
-    """把基线/本次读数归一成可比较的形状（缺字段补空、排序）。
+    """把基线读数归一成可比较的形状（缺字段补空、排序）。
 
     ★ 归一在**读**这一侧做，而不是在**写**那侧 —— 老版本写下的文件可能是
-      `{"undriven": ["mbf"]}` 而没有 `unreg` 键，读的时候不补就会 KeyError。
+      `{"undriven": ["mbf"]}` 而没有别的键，读的时候不补就会 KeyError。
+    ★★ 2026-10-05（去掉闸门）：判据改成「从没被搜过的包」单维 ⇒ 只剩 `undriven`。
+      旧基线里可能还带一个 `unreg` 键（旧判据的"在名单里但库里没登记"那一头）——
+      这里**读进来源忽略**它（`unreg` 这个概念随名单一起退休了）。
     """
     d = d if isinstance(d, dict) else {}
-    return {"undriven": sorted(d.get("undriven") or []),
-            "unreg": sorted(d.get("unreg") or [])}
+    return {"undriven": sorted(d.get("undriven") or [])}
 
 
 def _reconcile_read() -> dict:
@@ -1722,16 +1728,23 @@ def reconcile_watch(args) -> tuple[str, dict]:
           配上 alert 的 12 小时冷却就是"每天响两次、永远" —— 现状不是新闻。
           基线（已接受的那几条路径）存 `.reconcile.state` 的 `_unclaimed_baseline`；
           出现基线里没有的路径才响，缩回（含清空到 0）静默采纳但**在正文里写出来**。
-      · 声明点〔`--packs`〕：`pack` 表 − `--packs` 的差集，两个方向各报一份。
-        实测 = 登记 3 个（`dc-collection` / `frds-top250-2024` / `mbf`）、名单 3 个
-        → 差集 = **空**（2026-09-13 把 `mbf` 排进 `PACKS_DEFAULT` 之后；此前
-        恒为 {`mbf`}、基线 1）。它就是那种"**认得出来、只是从来不排它**"的包：
-        `pack` 表有行、`movie` 表有 4 行、`farm_root` 也有 → 在 unclaimed /
-        report / trend 上**全绿**。抓不到它的原因不是判据算错了，是
-        **没有一条判据的输入源包含 `--packs` 的实际值**（§18.18 那个形状）。
-        基线 0；**涨到 1 就是又落下一个包**。
-        ★ 缩回基线之内是**静默采纳**的（见下），所以这次 1 → 0 **不会有告警** ——
-          那是对的：修好了不该喊。
+      · 声明点〔`pack` 表〕：★★ 2026-10-05（去掉「包的闸门」）**改了判据**。
+        旧判据 = `pack` 表 − `--packs` 名单的差集，问「**登记了却没被驱动**的包」——
+        去掉名单后名单这个概念没了，那个差集**恒为空**（§18.18「恒绿摆设」形状），
+        于是判据必须换一个**仍然会红**的问题：
+        **新判据 = 「登记的包里，从没被搜过一次的」**。
+        证据（只读 `movie` 表，逐包判）：一个包被搜过 ⟺ 它有任一条件成立 ——
+          `attempts > 0`（搜索次数记过）∨ `coalesce(seeding_count,0) > 0`（做着种）
+          ∨ `stage ∈ DONE_STAGES`（SEEDING/MATCHED）。
+        ⇒ 三者皆无 = **白登记**：状态机有它、农场有它、池子也会点它，但它**一次
+          都没被搜到过**（成因可能是 DB 里没 searchee、农场没硬链接、路径全错）。
+        ★ 与旧判据**同一个病灶**（"认得出来、就是不产读数"），只是**成因从"不在
+          名单"换成了"登记时没落实"** —— 去掉闸门后前者已不可能，后者仍会。
+        ★ 基线 0；涨到非 0 就是又落下一个这样的包。缩回基线之内**静默采纳**
+          （修好了不该喊），但正文里写出来。
+        ★ 只报**变化**：`_packs_baseline` 现在是 `{"undriven": [<包名>]}` 单维。
+          旧的 `{"undriven":…, "unreg":…}` 基线读进来时靠 `_packs_norm` 兼容
+          （`unreg` 维被忽略，不再参与判据）。
 
     ★ **口径的第三个维度：这次的读是「当日日志」，不是"全量"。**
       `--log` 指向的 `info.current.log` 由 cross-seed **按天轮转**
@@ -1764,7 +1777,7 @@ def reconcile_watch(args) -> tuple[str, dict]:
     """
     m: dict = {"fa": "n/a", "fb": "n/a", "fd": "n/a",
                "fb_c_all": "n/a", "fb_c_farm": "n/a", "unclaimed": "n/a",
-               "packs_undriven": "n/a", "packs_unreg": "n/a"}
+               "packs_undriven": "n/a"}
     lines: list[str] = []
     prev_ok = _reconcile_read()             # #34：每一格上次真的读到数是什么时候
     packs_baseline = None                   # 本次算出的新基线（没算就保持 None，别抹掉旧的）
@@ -2021,119 +2034,93 @@ def reconcile_watch(args) -> tuple[str, dict]:
         LOG.debug("无人认领对账失败", exc_info=True)
         lines.append(f"观测对账〔无人认领〕：算不出（{type(e).__name__}: {e}）")
 
-    # ---- 声明点〔--packs〕：**登记了却没被驱动**的包 ----
-    # ★★ 为什么必须单独立一条：上面那条「无人认领」问的是「农场里有没有谁都认不出的
-    #    片」，而 `mbf` 这种「**认得出、只是从来不排它**」的包在它面前是**全绿**的 ——
-    #    `pack` 表有行、`movie` 表有 4 行、`farm_root` 也有。实测它从建包起一直躺到
-    #    今天没被驱动过一次，而**没有任何一条告警能抓到**：不是判据算错了，是
-    #    **没有一条判据的输入源包含 `--packs` 的实际值**（§18.18 那个形状 ——
-    #    全绿，因为规则根本没参与）。
-    #    ★ 2026-09-13：`mbf` 已排进 `PACKS_DEFAULT`（#40），**这条判据的成因没了** ——
-    #      差集从 {`mbf`} 缩成空。下面继续拿它当例子，是因为它就是这条判据**为什么
-    #      存在**的物证；现存的用途变成「**下一个**躺着不被驱动的包」。
-    # ★ 两个方向都要报，而且**方向不同、后果不同**：
-    #      pack 表 − `--packs` = 登记了却没被驱动 → 白登记：状态机有它、农场有它、
-    #                            就是不排它，它的片子**永远不会被搜到**
-    #      `--packs` − pack 表 = 在名单里但库里没登记 → 更糟：状态机看不见它的片子，
-    #                            整包会被判成「别的包」（other_pack）而静默降级
-    # ★ 这条**只报变化，不报现状**（2026-09-12 深夜改）。现状（例如 `mbf` 登记了
-    #    却一直没被驱动）是**已接受**的，每天喊一次只会把告警喊成噪音 ——
-    #    而噪音的代价是**真的出问题时没人看**。
+    # ---- 声明点〔`pack` 表〕：**登记的包里，从没被搜过一次的** ----
+    # ★★ 2026-10-05（去掉「包的闸门」）**改了判据**。旧判据问的是「`pack` 表 −
+    #    `--packs` 名单 = 登记了却没被驱动的包」—— 而名单（`--packs`/`PACKS_DEFAULT`）
+    #    已整体退休 ⇒ 那个差集**恒为空**（§18.18「恒绿摆设」形状：规则根本不参与）。
+    #    ⇒ 必须换一个**仍然会红**的问题，否则这条判据就成了摆设。
+    #
+    # 新判据 = 「登记的包里，**从没被搜过一次**的」。
+    #   一个包"被搜过"的证据（只读 `movie` 表，逐包判，任一成立即可）：
+    #     · `attempts > 0`（搜索次数记过） ∨ `coalesce(seeding_count,0) > 0`（做着种）
+    #       ∨ `stage ∈ DONE_STAGES`（SEEDING/MATCHED）
+    #   三者皆无 = **白登记**：状态机有它（`pack` 表有行）、农场大概也有它，
+    #   但它**一次都没被搜到过**。成因与旧的"不在名单"不同（那个已不可能），
+    #   可能是：登记时没建 searchee、农场没硬链接、路径全错。
+    #   ★ 与旧判据**同一个病灶**（"认得出来、就是不产读数"），只是换了成因 ——
+    #     而它在 unclaimed / report / trend 上**仍然全绿**，所以还得单独报。
+    # ★ 这条**只报变化，不报现状**（2026-09-12 改）：现状（例如某个包登记时就没
+    #    落实）是**已接受**的，每天喊一次只会把告警喊成噪音 —— 而噪音的代价是
+    #    **真的出问题时没人看**。
     #      · 差集里出现了**基线里没有**的 → 发 alert（有新问题）
     #      · 与基线一致、或**缩回**基线之内 → **不发**（修好了不必喊）
     #    无论发不发，都把它采纳为新基线 —— 所以同一个差集只喊一次。
-    #    ★ 缩也采纳：不然「删掉 mbf 打的那一行」之后基线还是旧的，
-    #      将来它再被加回来时，「又冒出来了」这件事就没人报（那才是真要抓的）。
+    #    ★ 缩也采纳：不然「删掉打的那一行」之后基线还是旧的，将来它再冒出来时
+    #      「又冒出来了」这件事就没人报（那才是真要抓的）。
     # ★ 基线**不进代码、进状态文件**（`.reconcile.state` 的 `_packs_baseline`）：
     #    写进代码就分不清「回到基线」和「判据死了」（§18.19 的教训）。
     # ★ 但**日报正文照旧每天打印**完整差集 —— 不告警 ≠ 看不见。
-    # ★ 「没给 `--packs`」必须给 `n/a` 而不是 0：调用方没传和名单对得上是两件事，
-    #    TSV 里两者长得一样就没法事后分开（同上面 `fa`/`unclaimed` 的规矩）。
+    # ★ 库读不到必须给 `n/a` 而不是 0：TSV 里两者长得一样就没法事后分开
+    #   （同上面 `fa`/`unclaimed` 的规矩）。
     try:
-        plist = getattr(args, "packs", None)
         if store is None:
-            lines.append("声明点对账〔--packs〕：状态库读不到 —— "
-                         "登记 vs 驱动**没跑成**，别念成 0")
-        elif not plist:
-            lines.append(f"声明点对账〔--packs〕：跳过（调用方没给 `packs`；"
-                         f"默认值是 {PACKS_DEFAULT}）")
+            lines.append("声明点对账〔pack 表〕：状态库读不到 —— "
+                         "「从没被搜过」**没跑成**，别念成 0")
         else:
-            driven = [p.strip() for p in str(plist).split(",") if p.strip()]
             reg = [r["name"] for r in store.packs()]
-            undriven = [p for p in reg if p not in driven]
-            unreg = [p for p in driven if p not in reg]
-            m.update(packs_undriven=len(undriven), packs_unreg=len(unreg))
-            cur = {"undriven": sorted(undriven), "unreg": sorted(unreg)}
+            undriven = [name for name in reg if _pack_never_searched(store, name)]
+            m.update(packs_undriven=len(undriven))
+            cur = {"undriven": sorted(undriven)}
             packs_baseline = cur          # 无论告不告警都采纳
             prev_b = _packs_norm(prev_ok.get(PACKS_BASELINE_KEY))
 
             if PACKS_BASELINE_KEY not in prev_ok:
                 # 第一次读数：现状不是新闻 → 记基线，**不告警**。
-                # ★ 这一步同时是「mbf 这种躺着的老问题不再每天喊」的开关。
                 note = ("   ★ 首次读数 → 已记为基线，**不告警**"
                         "（现状不是新闻；往后只报变化）。")
             else:
-                grew = []
-                for dim, label in (("undriven", "登记了却没被驱动"),
-                                   ("unreg", "在名单里但库里没登记")):
-                    new = [x for x in cur[dim] if x not in prev_b[dim]]
-                    if new:
-                        grew.append(f"{label}：新增 {'、'.join(new)}")
-                # ★ 缩了也是好消息 —— 但**要写出来**（2026-09-13 补，与「无人认领」那条对齐）：
-                #   否则「基线少了」在日报里和「什么都没发生」长得一样，
-                #   就分不清「`mbf` 被排进 `--packs` 了（预期）」和「判据今天没读到（故障）」。
-                #   ★ 这一支是**补**出来的：两条基线判据（无人认领 / `--packs`）当时只给
-                #   无人认领写了缩回文案，`--packs` 缩回时会掉进 `else` 打印
-                #   「与基线一致」—— 一句**不真的话**（它明明少了 `mbf`）。
-                #   触发点正是 #40：把 `mbf` 排进 `PACKS_DEFAULT` 就是一次缩回。
-                gone = []
-                for dim, label in (("undriven", "登记了却没被驱动"),
-                                   ("unreg", "在名单里但库里没登记")):
-                    lost = [x for x in prev_b[dim] if x not in cur[dim]]
-                    if lost:
-                        gone.append(f"{label}：少了 {'、'.join(lost)}")
-                if grew:
+                new = [x for x in cur["undriven"] if x not in prev_b["undriven"]]
+                # ★ 缩了也是好消息 —— 但**要写出来**（与「无人认领」那条对齐）：
+                #   否则「基线少了」在日报里和「什么都没发生」长得一样，就分不清
+                #   「某包被搜过了（预期）」和「判据今天没读到（故障）」。
+                lost = [x for x in prev_b["undriven"] if x not in cur["undriven"]]
+                if new:
                     note = "   ★ 与基线相比**有变化** —— 已告警。"
                     emit(
                         "alert",
-                        f"声明点对账：差集**变了**（{len(grew)} 类有新增）",
-                        body=("`pack` 表登记的包，和 `--packs` 驱动的名单，"
-                              "**差集变了**。\n"
-                              "（本判据只报**变化**：与基线一致的现状不再每天喊。）\n\n"
-                              + "\n".join("  ★ " + g for g in grew) + "\n\n"
-                              f"  登记了却没被驱动（{len(undriven)}）："
+                        f"声明点对账：**从没被搜过**的包变多了（+{len(new)}）",
+                        body=("有**新登记的包**一次都没被搜到过（本判据只报**变化**，"
+                              "与基线一致的现状不再每天喊）。\n\n"
+                              f"  ★ 新增：{'、'.join(new)}\n\n"
+                              f"  从没被搜过的包（{len(undriven)}）："
                               f"{'、'.join(undriven) or '(无)'}\n"
-                              "     ★ 白登记。它的片子永远不会被搜到，也不会有人报。\n"
-                              "      要驱动它：把名字加进 `run.sh` 的 `--packs`（或改 "
-                              f"`drive-loop.py` 的 `PACKS_DEFAULT`）；\n"
-                              "      不想驱动它：在 `state.db` 里删掉那一行。\n\n"
-                              f"  在名单里但库里没登记（{len(unreg)}）："
-                              f"{'、'.join(unreg) or '(无)'}\n"
-                              "     ★★ 更糟的一头 —— `--packs` 里的名字必须有 `pack` 表行，\n"
-                              "      否则状态机看不见它的片子，整包会被判成别的包而静默降级。\n\n"
-                              f"  当前名单：{PACKS_DEFAULT}（`--packs` 的默认值）\n"),
+                              "     ★ 白登记。它在 unclaimed / report / trend 上全是绿的，\n"
+                              "       但它的片子**一次都没被搜到过**。\n"
+                              "      排查：① 该包在 `movie` 表里有行吗（登记是否落实）？\n"
+                              "            ② 农场硬链接建上了吗（`build-farm.sh`）？\n"
+                              "            ③ `pack.root`/`local_root` 路径对吗？\n"
+                              "      ★ 现在**没有名单闸门**了：登记即被驱动，所以这不再是\n"
+                              "        「忘了排进名单」，而是「登记本身没落实」。\n"),
                         key="packs-mismatch",
-                        metrics={"packs_undriven": len(undriven),
-                                 "packs_unreg": len(unreg)})
-                elif gone:
+                        metrics={"packs_undriven": len(undriven)})
+                elif lost:
                     note = ("   ★ 比基线**少** —— 不告警（修好了不必喊；"
                             "新基线已采纳，**再长回来会报**）：\n"
-                            + "\n".join("     − " + g for g in gone))
+                            + "\n".join("     − 从没被搜过：" + x for x in lost))
                 else:
                     note = "   ★ 与基线一致 —— 不告警（只报变化，不再每天喊）。"
             lines.append(
-                f"声明点对账〔--packs〕：登记 {len(reg)} 个 / 驱动 {len(driven)} 个\n"
-                f"   登记了却没被驱动（{len(undriven)}）："
+                f"声明点对账〔pack 表〕：登记 {len(reg)} 个 / "
+                f"其中从没被搜过 {len(undriven)} 个\n"
+                f"   从没被搜过（{len(undriven)}）："
                 f"{'、'.join(undriven) or '(无)'}\n"
-                f"   在名单里但库里没登记（{len(unreg)}）："
-                f"{'、'.join(unreg) or '(无)'}\n"
-                f"   ★ 前者是「白登记」：状态机有它、农场有它、**就是不排它** ——"
-                f"它的片子永远不会被搜到，\n"
-                f"     而它在 unclaimed / report / trend 上全是绿的。\n"
+                f"   ★ 判据 = 该包**一条 `attempts>0` / `seeding_count>0` / "
+                f"`stage∈DONE` 都没有**；\n"
+                f"     它在 unclaimed / report / trend 上全是绿的，所以单列一条。\n"
                 f"{note}")
     except Exception as e:                  # noqa: BLE001
-        LOG.debug("--packs 对账失败", exc_info=True)
-        lines.append(f"声明点对账〔--packs〕：算不出（{type(e).__name__}: {e}）")
+        LOG.debug("pack 表对账失败", exc_info=True)
+        lines.append(f"声明点对账〔pack 表〕：算不出（{type(e).__name__}: {e}）")
 
     try:
         if store is not None:
@@ -2559,54 +2546,22 @@ def after_batch_reports(args) -> None:
         LOG.debug("收尾通知失败（不影响跑批）", exc_info=True)
 
 
-def run_round(pack: str, packs: list[str], args, api_key: str) -> S.DriveStats | None:
-    """对指定包跑一批 drive + 回灌。返回 DriveStats；无待搜 / 出错返回 None。
+def run_round(pack: str, args, api_key: str) -> S.DriveStats | None:
+    """跑一批 drive + 回灌（池路径：跨**全部登记包**取全局前 N）。返回 DriveStats；
+    无待搜 / 出错返回 None。
 
     ★ 回灌必须带 qB（qbit_torrents）—— 否则 stage 推导拿不到"是否在做种"，
       原本 SEEDING 的片子会被误降级成 MATCHED（2026-09-11 踩过）。
 
-    ★★ `--pool`（`e404b1ca#6` ①）：此时 `pack` 只当**批次标签**用（`"pool"`），
-       实际取件是**跨包合池**、`--limit` 是**全局**的。`packs`（**已清洗的列表**）给出池子里的包。
+    ★★ 2026-10-05（去掉「包的闸门」）：**只剩池路径**。`pack` 不再"轮到哪个包"，
+      而只当**批次标签**用（可传 `"pool"` 或某包名做日志前缀）；实际取件是
+      `st.todo_pooled(require_packs(st), …)` —— 扫 **`pack` 表全部登记的包**、
+      `--limit` 是**全局**的。原先那条"一个包一批"（`todo_detail(pack)`）与非池
+      `apply_batch` 分支已删。
 
-       ★★★ **绝不要在这里写 `args.packs`** —— 那是 `--packs` 的**原始字符串**
-         （`"a,b"`，见 `main()` 里 `packs = [p.strip() for p in args.packs.split(",") …]`），
-         而 `list("frds-top250-2024")` **不是在切逗号**：它把字符串**拆成一个个字符**
-         ⇒ 变成 16 个单字符"包名" ⇒ `WHERE pack='f'` 之类**一个都匹配不上**
-         ⇒ `movies()` 全空 ⇒ **池子恒为 0、每轮都打「没有待搜索项」**。
-
-       ★★ 这个错**只在 `--pool` 上暴露**（非 `--pool` 那条用干净的 `pack`），
-         症状是**静默**的：启动日志打的是清洗过的 `packs`（`packs=['frds-top250-2024']`），
-         **看着完全正常**；日志报「没有待搜索项」而不是报错；
-         而同一个进程加 `--dry-run` 反而正常（那条路用的正是 `packs`）
-         ⇒ 2026-09-22 实测：**常驻连续 14 轮、7 小时全空**，`--dry-run` 给 43、去掉给 0。
-         ★ 判据的形状：**两处调用同一函数、参数看起来一样、结果不同 ⇒ 去比那两个表达式的
-         *类型*，不是值**。当时两边打印出来都是 `frds-top250-2024`。
-
-       ★ 记账仍**按包分段**（用户 2026-09-20 拍）：每个出现在本批里的包各发一条
-         `batch` 事件、各带**自己的** `pack=` 与读数 ⇒ 日报「按包聚合」口径不变。
-
-    ★★★ `packs` 是**显式参数**（不是从 `args.packs` 现算）—— 故意的：
-      2026-09-22 的事故就是"以为 `args.packs` 是列表"。做成参数后，
-      **"这里是原始串还是列表"在调用点就看得见**，不靠记性。
-      ⇒ 下面那条 guard 把判据从"类型"再收一道：`list("frds…")` 会得到 16 个
-        **单字符**，它们**不是**库里真有的包名 ⇒ 当场炸在入口，**不再静默算空**。
+    ★★ 记账仍**按包分段**（用户 2026-09-20 拍）：每个出现在本批里的包各发一条
+      `batch` 事件、各带**自己的** `pack=` 与读数 ⇒ 日报「按包聚合」口径不变。
     """
-    # ★★★ 入口 guard：`packs` 必须是"包名列表"的**形状**。
-    #   允许 2 个字符以上的元素（真包名如 `frds-top250-2024` / `mbf`；
-    #   `mbf` 是 3 字符 ⇒ 下界取 2 是安全的），并且元素里不许出现**单字符**。
-    #   ★ 为什么这条能抓住事故：`list("frds-top250-2024")` 的 16 个元素**全是单字符**
-    #     ⇒ 直接命中。而正常的包名列表里**至少有一个**多字符元素。
-    #   ★ 为什么不是"必须是 list[str]"就完事：事故原码 `list(args.packs)` **也**是
-    #     `list[str]` —— 类型对了、**内容错了**。⇒ 判据必须落在**元素形状**上，
-    #     这正是 `ERR-AI-09` 那条"防假绿的装置本身可能是假绿的"。
-    assert isinstance(packs, list) and packs, (
-        "run_round 的 packs 必须是非空列表，收到 %r" % (type(packs).__name__,))
-    assert any(len(p) > 1 for p in packs), (
-        "★★★ run_round 的 packs 里**全是单字符**（%r）—— 这几乎肯定是把 `--packs` 的"
-        "**原始字符串**当列表用了（`list('frds-top250-2024')` 会拆成 16 个字符）"
-        "⇒ 查库恒空、池子恒为 0（2026-09-22 那次事故）。"
-        " 正确做法：`packs_from_arg(args.packs)`。" % (packs[:8],))
-
     st = S.StateStore(args.db)
     # ★★ 本批的**时间窗起点**（2026-09-23）：给 `first_seeding_between()` 用。
     #   为什么取在这里：在这一刻之后写的 `attempt` 行都算"本批干的活"。
@@ -2617,40 +2572,25 @@ def run_round(pack: str, packs: list[str], args, api_key: str) -> S.DriveStats |
     batch_t0 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         idx = [i.strip() for i in (args.indexers or "").split(",") if i.strip()] or None
-        if getattr(args, "pool", False):
-            # ★★ 合池：一次拿到全局池序，按 **全局** `--limit` 截断。
-            #   ★ `--batch` 在合池下**没有意义**（池是"每次从头取前 N"、不是切片），
-            #     所以这里显式拒绝，而不是悄悄忽略 —— 悄悄忽略正是"参数看着生效、
-            #     其实没生效"那类坑（`A.11`）。
-            if args.batch:
-                LOG.warning("[pool] `--batch` 在合池模式下无效（池每次按全局 --limit 取前 N）；"
-                            "要分批请用 `--limit`。本次**忽略** --batch。")
-            pooled = st.todo_pooled(
-                list(packs), indexers_now=idx,
-                include_cooldown=args.include_cooldown,
-                cadence_days=args.cadence_days,
-                cadence_by_indexer=S.parse_cadence(args.cadence),
-                limit=args.limit)
-            pairs = [(r, due) for _, r, due in pooled]
-            batch_packs = sorted({pk for pk, _, _ in pooled})
-            seeding_before = {pk: sum(1 for r in st.movies(pk)
-                                      if r["stage"] == S.STAGE_SEEDING)
-                              for pk in batch_packs}
-            plan = (f"合池：{len(packs)} 个包共 {len(pairs)} 部待搜，"
-                    f"本批取全局前 {len(pairs)}（--limit {args.limit}）"
-                    f"；本批涉及包：{', '.join(batch_packs) or '（无）'}")
-        else:
-            pairs = st.todo_detail(pack, indexers_now=idx,
-                                   include_cooldown=args.include_cooldown,
-                                   cadence_days=args.cadence_days,
-                                   cadence_by_indexer=S.parse_cadence(args.cadence))
-            seeding_before = sum(1 for r in st.movies(pack) if r["stage"] == S.STAGE_SEEDING)
-            batch_packs = [pack]
+        # ★ 池源 = `pack` 表全部登记的包；空表 ⇒ 抛 NoPacksRegistered（不静默算空）。
+        pool = require_packs(st)
+        pooled = st.todo_pooled(
+            pool, indexers_now=idx,
+            include_cooldown=args.include_cooldown,
+            cadence_days=args.cadence_days,
+            cadence_by_indexer=S.parse_cadence(args.cadence),
+            limit=args.limit)
+        pairs = [(r, due) for _, r, due in pooled]
+        batch_packs = sorted({pk for pk, _, _ in pooled})
+        seeding_before = {pk: sum(1 for r in st.movies(pk)
+                                  if r["stage"] == S.STAGE_SEEDING)
+                          for pk in batch_packs}
+        plan = (f"池：{len(pool)} 个包共 {len(pairs)} 部待搜，"
+                f"本批取全局前 {len(pairs)}（--limit {args.limit}）"
+                f"；本批涉及包：{', '.join(batch_packs) or '（无）'}")
     finally:
         st.con.close()
 
-    if not getattr(args, "pool", False):
-        pairs, plan = S.apply_batch(pairs, limit=args.limit, batch=args.batch)
     if pairs is None:
         LOG.warning("[%s] %s", pack, plan)
         return None
@@ -2658,8 +2598,7 @@ def run_round(pack: str, packs: list[str], args, api_key: str) -> S.DriveStats |
     if not paths:
         LOG.info("[%s] 没有待搜索项。", pack)
         return None
-    if getattr(args, "pool", False):
-        LOG.info("[pool] %s", plan)
+    LOG.info("[pool] %s", plan)
 
     # ★ 必须把 on_event 接到 LOG 上，否则整批**全程零输出**（2026-09-12 凌晨踩过，
     #   当时对着空日志怀疑批次被杀了，白查一轮）。
@@ -2722,11 +2661,11 @@ def run_round(pack: str, packs: list[str], args, api_key: str) -> S.DriveStats |
         except Exception as e:  # noqa: BLE001
             LOG.warning("取 qB 列表失败（忽略）: %s", e)
     st = S.StateStore(args.db)
-    # ★★ 记账口径：**每批一个包**（老行为）vs **按包分段**（`--pool`，用户 2026-09-20 拍）。
-    #   ★ 合池时 `sync_pack` **仍按包调**（它本来就是"重算这个包的行"），
-    #     所以"分段"不是额外发明 —— 是把原本那一次调用变成**每个涉及的包各一次**。
+    # ★★ 记账口径：**按包分段**（用户 2026-09-20 拍；2026-10-05 后是唯一口径）。
+    #   ★ `sync_pack` **按包调**（它本来就是"重算这个包的行"），所以"分段"不是
+    #     额外发明 —— 是把原本那一次调用变成**每个涉及的包各一次**。
     #     日报的「按包聚合」正是靠 `batch` 事件的 `pack=` 键，于是口径**一字不改**。
-    seg_packs = batch_packs if getattr(args, "pool", False) else [pack]
+    seg_packs = batch_packs
     segs: list[dict] = []
     try:
         for pk in seg_packs:
@@ -2924,7 +2863,7 @@ PHASE_RUNNING = "running"  # 正在跑批 —— 别抢
 
 
 def write_heartbeat(phase: str | None = None) -> None:
-    """刷新心跳（合并进现有状态，不动 running_pid / last_pack_idx）。
+    """刷新心跳（合并进现有状态，不动 running_pid）。
 
     `phase` 为 None 时**不动**已有的 `phase` 键（保持向后兼容：
     老的调用点一个参数都不传，行为与加这个参数之前**逐字相同**）。
@@ -3145,12 +3084,18 @@ def log_result(pack: str, stats: S.DriveStats | None) -> float | None:
     return sleep_sec
 
 
-def once_round(packs: list[str], args, api_key: str, min_sleep: float) -> int:
-    """`--once` 单批模式：跨进程节流（防计划任务唤醒重叠）+ 包轮换持久化。
+def once_round(args, api_key: str, min_sleep: float) -> int:
+    """`--once` 单批模式：跨进程节流（防计划任务唤醒重叠）+ 跑**一池**。
 
     - 上一批还在跑（pid 活着）→ 直接退出
     - 距上次批次结束不足 **闸门** 秒 → 直接退出（防猛打）
-    - 否则跑「轮到的那个包」一批，并把 {结束时间, 包序号, 下批间隔} 写回状态文件
+    - 否则跑**一池**（扫 `pack` 表全部登记包取全局前 N），并把 {结束时间, 下批间隔}
+      写回状态文件
+
+    ★★ 2026-10-05（去掉「包的闸门」）：**没有"轮到的那个包"了** —— 每批都取全局
+      池前 N。原先的 `last_pack_idx` 取模轮换**已删**（那是"名单"机制的产物）。
+      ⇒ `--once` 与常驻**共用同一套取池逻辑**（都在 `run_round` 里），差别只在
+         `--once` 每进程一批、常驻循环多批。
 
     ★ 闸门 = max(min_sleep, 上一批算出的间隔)。上一批撞了退避 → `next_sleep()`
       给 1.5~2 小时，这里就真的会等那么久；站点健康 → 45 分钟，但不短于
@@ -3186,14 +3131,11 @@ def once_round(packs: list[str], args, api_key: str, min_sleep: float) -> int:
                  gap / 60, wait / 60, why)
         return 0
 
-    idx = (int(st.get("last_pack_idx", -1)) + 1) % len(packs)
-    # ★★ `--pool`：合池下**没有"轮到哪个包"** —— 每批都取全局池前 N。
-    #   ★ `idx` 仍照算并落盘（`last_pack_idx` 是已落盘读数，含义不擅自改），
-    #     只是不再用它选包。
-    #   ★ 用 `getattr(..., False)` 而不是 `args.pool`：调用方（含测试）会构造
-    #     **只带自己那几个字段**的 ad-hoc Namespace ⇒ 硬取属性会让它们全炸
-    #     （2026-09-21 实测：`test_once_gate` 就是这么红的）。"没给" = "关着"。
-    pack = "pool" if getattr(args, "pool", False) else packs[idx]
+    # ★★ 2026-10-05（去掉闸门）：**没有"轮到哪个包"** —— 每批都取全局池前 N。
+    #   ★ `last_pack_idx` 的取模轮换**已删**（那是"名单"机制的产物；见 `once_round`
+    #     docstring）。这里只给批次一个**日志标签**，取件完全由 `run_round` 里的
+    #     `todo_pooled(require_packs(st), …)` 决定。
+    pack = "pool"
     # ★★ `#58` D1：容器里 `running_pid` **语义不同**（恒为 1，见 batch_alive 的说明）。
     #   这里自动判"我是不是在容器里"，容器版就多写一个标记键，让 batch_alive 跳过 pid。
     #   ★ 判据用**文件系统**（`/.dockerenv`）而不是环境变量：环境变量可能是人传进来的、
@@ -3210,7 +3152,7 @@ def once_round(packs: list[str], args, api_key: str, min_sleep: float) -> int:
     if _in_container:
         LOG.info("[容器] running_pid=%d（容器内 PID，**不参与存活判据**；只信心跳）",
                  os.getpid())
-    LOG.info("[--once] 跑包 %s（第 %d/%d 个）", pack, idx + 1, len(packs))
+    LOG.info("[--once] 跑池（全局前 --limit %s）", args.limit)
 
     stats = None
     sleep_sec = None      # 本批算出的下批间隔；没跑成 / 无动作 → None（按无退避证据）
@@ -3224,11 +3166,24 @@ def once_round(packs: list[str], args, api_key: str, min_sleep: float) -> int:
         #   （例如宿主任务与常驻容器交接的窗口），写一个准确的 `running` 是对的。
         #   ★ 也**不能**在这里写 `idle`：这一批**确实在跑**。
         with Heartbeat(phase=PHASE_RUNNING):
-            stats = run_round(pack, packs, args, api_key)
+            stats = run_round(pack, args, api_key)
         sleep_sec = log_result(pack, stats)
         if stats is None:
-            # 这个包没待搜 —— 看看是不是所有包都干完了（无人值守时必须出声）
-            alert_if_all_done(packs, args.db)
+            # 这个池没待搜 —— 看看是不是所有登记的包都干完了（无人值守时必须出声）
+            # ★ 池源 = `pack` 表全部登记的包。空表本应由 run_round 里的 `require_packs`
+            #   抛出 `NoPacksRegistered` 走下面 except —— 但那条路在**本分支**之前，
+            #   这里 run_round 已返回 None（可能是"池真空"而不是"表空"）。
+            #   ★ 读库这一步**自己兜住异常**：`alert_if_all_done` 是收尾通知，
+            #     读不到库时**不该**让整批判成异常（同 reconcile_watch 的规矩）。
+            try:
+                _cp = S.StateStore(args.db)
+                try:
+                    _pool = pool_packs(_cp)
+                finally:
+                    _cp.con.close()
+                alert_if_all_done(len(_pool), args.db, _pool)
+            except Exception:            # noqa: BLE001 —— 收尾通知失败不影响收尾
+                LOG.debug("全完成判定跳过（读库失败）", exc_info=True)
             # ★ 农场巡检**不能只挂在「批次跑完了」那条路上**：它在
             #   after_batch_reports 里，而 run_round 没待搜时会**提前 return None**，
             #   根本走不到那里。于是"所有包都搜完了"的那几天，巡检会**跟着一起停**
@@ -3263,7 +3218,7 @@ def once_round(packs: list[str], args, api_key: str, min_sleep: float) -> int:
         #   所以不写就等于**删掉** `phase` ⇒ 下一个读者走「旧格式」分支（只信心跳）
         #   ⇒ 「说在跑的那位其实早收工了」检测不到。写 `idle` = 「我不在了」。
         write_state({"running_pid": None, "last_end_ts": time.time(),
-                     "last_pack_idx": idx, "consec_abort": streak,
+                     "consec_abort": streak,
                      "consec_backoff": backoff_streak,
                      "phase": PHASE_IDLE,
                      "last_sleep_sec": clamp(sleep_sec) if sleep_sec else 0.0})
@@ -3273,19 +3228,11 @@ def once_round(packs: list[str], args, api_key: str, min_sleep: float) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="反馈驱动循环：自动续跑 cross-seed 搜索")
-    ap.add_argument("--packs", default=PACKS_DEFAULT,
-                    help=f"包顺序，逗号分隔（轮流推进），默认 {PACKS_DEFAULT}")
-    # ★★ `--pool`（`e404b1ca#6` ①，用户 2026-09-20 拍：方案 a）：**跨包合池**。
-    #   ★ 关着（默认）= 老行为：每批 **一个**包、`--limit` 是**每包**的。
-    #   ★ 开着 = 三包合成一个池、`--limit` 是**全局**的 ⇒ 额度只花在**池序最前**
-    #     的片子上，不管它属于哪个包。
-    #   ★ 为什么默认**关**：这是改变"额度怎么分配"的**产品决定**，不是纯优化
-    #     （同 `PACKS_DEFAULT` 那条注释的道理）。开了之后：
-    #       · 欠账（`frds` 的 232 部 SKIPPED）会**每批都被优先吃掉** —— 好事
-    #       · 但小包（`mbf`）**再也不会独占一整批** ⇒ 它的读数是"混在批里"拿到的
-    #     ⇒ 换默认值要**人拍**，所以在 `--pool` 上显式开关，不偷偷改。
-    ap.add_argument("--pool", action="store_true",
-                    help="跨包合池：--limit 变全局（三包合起来取 N 个），记账仍按包分段")
+    # ★★ 2026-10-05（去掉「包的闸门」）：`--packs` / `--pool` / `--batch` 三个参数
+    #   **已删**。取件永远扫 `pack` 表全部登记的包（见 `pool_packs` / `run_round`），
+    #   `--limit` 是**全局**的。删 `--batch` 的理由：它只在**非池**的"切片"语义下
+    #   有意义，池是"每次从头取前 N"，`--batch` 本就无效（原先只是**告警后忽略**，
+    #   现在连同它的非池分支一起退休）。
     ap.add_argument("--once", action="store_true", help="只跑一轮（配合计划任务）")
     # ★ 为什么需要它：有几个观测（链接守护、对账基线、卡 999）**只挂在日报里**
     #   —— 它们要有个「锚」才能谈"变化"，而自然日报一天只投一次。想**当场起锚**
@@ -3321,7 +3268,6 @@ def main() -> int:
     ap.add_argument("--settle", type=float, default=90.0)
     ap.add_argument("--drain-max-wait", type=float, default=3600.0)
     ap.add_argument("--timeout", type=float, default=30.0)
-    ap.add_argument("--batch", type=int, default=None)
     ap.add_argument("--include-cooldown", action="store_true")
     ap.add_argument("--cadence-days", type=int, default=S.DEFAULT_CADENCE_DAYS)
     ap.add_argument("--cadence", default=None)
@@ -3354,10 +3300,6 @@ def main() -> int:
             ),
         ],
     )
-
-    # ★ 唯一一处 `--packs` 解析（见 `packs_from_arg` 的 docstring：
-    #   2026-09-22 两次栽在"原始串 vs 包名列表"上）
-    packs = packs_from_arg(args.packs)
 
     # 默认日志路径（cross-seed 的 info 日志），回灌要用
     if not args.log:
@@ -3393,8 +3335,8 @@ def main() -> int:
                 args.env = str(cand)
                 break
 
-    LOG.info("=== drive-loop 启动：packs=%s indexers=%s limit=%d ===",
-             packs, args.indexers, args.limit)
+    LOG.info("=== drive-loop 启动：池=pack 表全部登记包（无名单） indexers=%s limit=%d ===",
+             args.indexers, args.limit)
 
     # 通知：必须在 check_indexers / check_env_applied **之前**建好 ——
     # 那两个自检本身就会发告警（这恰恰是最需要有人看到的两个）。
@@ -3435,13 +3377,11 @@ def main() -> int:
     # 批次之间的最小间隔（常驻模式用它 sleep；--once 模式用它拦掉过密的唤醒）
     min_sleep = args.min_sleep or MIN_SLEEP
 
-    # --once：单批模式（配合 DSM 计划任务）。跨进程节流 + 包轮换见 once_round()。
+    # --once：单批模式（配合 DSM 计划任务）。跨进程节流见 once_round()。
     if args.once and not args.dry_run:
-        return once_round(packs, args, api_key, min_sleep)
+        return once_round(args, api_key, min_sleep)
 
     round_no = 0
-    # 包轮流：记录上次跑到哪个包，下次从下一个开始
-    cur_pack_idx = 0
     consec = (0, 0)      # (连续真失败批数, 连续良性收工批数)，各自跨阈值报警
 
     # ------------------------------------------------------------------ #
@@ -3472,12 +3412,14 @@ def main() -> int:
     _resident_started = time.time()
     #: 常驻模式的状态快照。**写在一个地方**（而不是在每个 `continue` 前各写一遍）——
     #: 循环里有三处 `continue`、一处正常返回，抄四遍必然会漂。
-    def _resident_state(round_n: int, pack_idx: int, streak, note: str,
+    def _resident_state(round_n: int, streak, note: str,
                         phase: str = PHASE_IDLE) -> None:
         """刷新常驻状态：心跳 + round + 包下标 + 连续失败计数。
 
-        ★ 字段名**沿用 `once_round()` 已有的**（`last_pack_idx` / `consec_abort` /
-          `consec_backoff`），不新造同义词 —— 否则 `batch_alive()` 与文档都要认两套。
+        ★ 字段名**沿用 `once_round()` 已有的**（`consec_abort` / `consec_backoff`），
+          不新造同义词 —— 否则 `batch_alive()` 与文档都要认两套。
+          ★★ 2026-10-05（去掉闸门）：`last_pack_idx` **已删** —— 它记的是"轮到第几个
+            包"的下标，而池路径**没有"轮到谁"**（每批都取全局池前 N）。
         ★ `running_pid` 在容器里语义不同（恒为 1）⇒ 照 `once_round` 的做法带
           `running_pid_pidns` 标记，让 `batch_alive()` 跳过 pid 那一半。
         ★★ 2026-09-18：新增 `phase`，**默认 `PHASE_IDLE`** —— 这个函数在四处的调用里
@@ -3492,65 +3434,52 @@ def main() -> int:
                      "mode": "resident",
                      "phase": phase,
                      "round": round_n,
-                     "last_pack_idx": pack_idx,
                      "consec_abort": int(streak[0]),
                      "consec_backoff": int(streak[1]),
                      "started_ts": _resident_started,
                      "note": note})
 
-    _resident_state(0, -1, consec, "启动")
+    _resident_state(0, consec, "启动")
     LOG.info("常驻模式：已写状态（pid=%d pidns=%s；round/heartbeat 每轮刷新）",
              os.getpid(), "container" if _in_container else "host")
 
     while args.max_rounds == 0 or round_no < args.max_rounds:
-        # ★★ `--pool`：不再"轮到一个包"，而是**每轮都取全局池的前 N**（`e404b1ca#6` ①）。
-        #   ★ `cur_pack_idx` 在合池下**不再参与选包**（没有"轮到谁"了），但仍照常
-        #     递增/落盘 —— 因为 `last_pack_idx` 是**已落盘的读数**，改了含义会让
-        #     旧读数的解释变（同 `PACKS_DEFAULT` 那段注释的顾虑）。
-        #   ★ 合池下 `--once` 就是"跑一批合池"，与老语义一致（跑一批）。
-        pack = ("pool" if getattr(args, "pool", False)
-                else packs[cur_pack_idx % len(packs)])
+        # ★★ 2026-10-05（去掉闸门）：**每轮都取全局池的前 N**（没有"轮到谁"了）。
+        #   `pack` 只是批次**日志标签**；取件完全由 `run_round` 决定。
+        pack = "pool"
         round_no += 1
 
         if args.dry_run:
             LOG.info("[%s] dry-run：列出待搜计划（不发请求）", pack)
             st = S.StateStore(args.db)
             idx = [i.strip() for i in (args.indexers or "").split(",") if i.strip()] or None
-            if getattr(args, "pool", False):
-                pooled = st.todo_pooled(
-                    list(packs), indexers_now=idx,
-                    include_cooldown=args.include_cooldown,
-                    cadence_days=args.cadence_days,
-                    cadence_by_indexer=S.parse_cadence(args.cadence),
-                    limit=args.limit)
-                from collections import Counter as _C
-                by_pack = _C(pk for pk, _, _ in pooled)
-                LOG.info("[pool] dry-run：全池 %d 部待搜，本批取全局前 %d"
-                         "（--limit %d）；本批涉及包：%s",
-                         sum(1 for pk in packs
-                             for _ in st.todo_detail(
-                                 pk, indexers_now=idx,
-                                 include_cooldown=args.include_cooldown,
-                                 cadence_days=args.cadence_days,
-                                 cadence_by_indexer=S.parse_cadence(args.cadence))),
-                         len(pooled), args.limit,
-                         ", ".join(f"{k}×{v}" for k, v in sorted(by_pack.items()))
-                         or "（无）")
-            else:
-                pairs = st.todo_detail(pack, indexers_now=idx,
-                                       include_cooldown=args.include_cooldown,
-                                       cadence_days=args.cadence_days,
-                                       cadence_by_indexer=S.parse_cadence(args.cadence))
-                pairs, plan = S.apply_batch(pairs, limit=args.limit, batch=args.batch)
-                LOG.info("[%s] %s", pack, plan)
+            # ★ 池源 = `pack` 表全部登记的包（空表抛 NoPacksRegistered，不静默算空）。
+            pool = require_packs(st)
+            pooled = st.todo_pooled(
+                pool, indexers_now=idx,
+                include_cooldown=args.include_cooldown,
+                cadence_days=args.cadence_days,
+                cadence_by_indexer=S.parse_cadence(args.cadence),
+                limit=args.limit)
+            from collections import Counter as _C
+            by_pack = _C(pk for pk, _, _ in pooled)
+            LOG.info("[pool] dry-run：全池 %d 部待搜，本批取全局前 %d"
+                     "（--limit %d）；本批涉及包：%s",
+                     sum(1 for pk in pool
+                         for _ in st.todo_detail(
+                             pk, indexers_now=idx,
+                             include_cooldown=args.include_cooldown,
+                             cadence_days=args.cadence_days,
+                             cadence_by_indexer=S.parse_cadence(args.cadence))),
+                     len(pooled), args.limit,
+                     ", ".join(f"{k}×{v}" for k, v in sorted(by_pack.items()))
+                     or "（无）")
             st.con.close()
             if args.once:
                 return 0
-            cur_pack_idx += 1
-            if not args.once:
-                _resident_state(round_no, cur_pack_idx - 1, consec, "dry-run")
-                with Heartbeat(phase=PHASE_IDLE):
-                    time.sleep(min_sleep)
+            _resident_state(round_no, consec, "dry-run")
+            with Heartbeat(phase=PHASE_IDLE):
+                time.sleep(min_sleep)
             continue
 
         t0 = time.time()
@@ -3563,11 +3492,11 @@ def main() -> int:
             # ★★ 2026-09-18：显式给 `phase=PHASE_RUNNING` —— 这是**唯一的**跑批态，
             #   其它三处（启动 / dry-run / 无动作 / 收工）都该是 `idle`。
             with Heartbeat(phase=PHASE_RUNNING):
-                stats = run_round(pack, packs, args, api_key)
+                stats = run_round(pack, args, api_key)
         except Exception as e:  # noqa: BLE001 —— 循环不能因单批异常而死
             LOG.exception("[%s] 本批异常（继续循环）", pack)
             emit("alert", f"{pack} 本批异常",
-                 body=(f"跑包 {pack} 时抛出异常（详见 drive-loop.log 的 traceback）。\n\n"
+                 body=(f"跑池时抛出异常（详见 drive-loop.log 的 traceback）。\n\n"
                        f"{type(e).__name__}: {e}\n\n"
                        "常见原因：cross-seed 没起来 / state.db 被占用 / NAS 掉线。\n"
                        "★ 连续异常会自动累计：到 3 批会再发一条「连续批失败」告警。\n"),
@@ -3575,29 +3504,29 @@ def main() -> int:
             consec = update_abort_streak(consec, None, failed=True)
             if args.once:
                 return 1
-            _resident_state(round_no, cur_pack_idx, consec, "本批异常")
+            _resident_state(round_no, consec, "本批异常")
             with Heartbeat(phase=PHASE_IDLE):
                 time.sleep(BACKOFF_SLEEP)
-            cur_pack_idx += 1
             continue
 
         if stats is None:
-            LOG.info("[%s] 本批无动作（没待搜或计划为空），跳过该包", pack)
+            LOG.info("[%s] 本批无动作（没待搜或计划为空）", pack)
             consec = update_abort_streak(consec, None)   # 正常，两个计数都清零
-            cur_pack_idx += 1
-            # ★★ 合池下判据**更强**：一个批就是**整个池**，所以"本批没待搜" **直接**
-            #   等于"三包全空" ⇒ 立刻判全完成，不用再等 3 轮轮空。
-            #   ★ 非合池时保持老行为（要轮到**每个**包都空才算）—— 一次空批只说明
-            #     "轮到的那个包空了"，别的包可能还有欠账。
-            if getattr(args, "pool", False):
-                if alert_if_all_done(packs, args.db):
-                    return 0
-            elif cur_pack_idx % len(packs) == 0:
-                if alert_if_all_done(packs, args.db):
-                    return 0
+            # ★★ 2026-10-05（去掉闸门）：**一个批就是整个池** ⇒ "本批没待搜"
+            #   就**直接**等于"全部登记的包都没待搜" ⇒ 立刻判全完成，
+            #   不用再等"每个包都轮到一次空批"（老的非池逻辑已删）。
+            #   ★ 空表（包数 0）**不到这里**：池源为空的故障已由 `run_round` 里的
+            #     `require_packs()` 抛出、走上面的 except，**不假报"全干完"**。
+            _cp = S.StateStore(args.db)
+            try:
+                _pool = pool_packs(_cp)
+            finally:
+                _cp.con.close()
+            if alert_if_all_done(len(_pool), args.db, _pool):
+                return 0
             if args.once:
                 return 0
-            _resident_state(round_no, cur_pack_idx - 1, consec, "本批无动作")
+            _resident_state(round_no, consec, "本批无动作")
             with Heartbeat(phase=PHASE_IDLE):
                 time.sleep(min_sleep)
             continue
@@ -3614,15 +3543,13 @@ def main() -> int:
             LOG.warning("  → 仍有 %d 部被退避（站点侧 502/限流？见 SUMMARY §6.5）",
                         stats.still_skipped)
 
-        cur_pack_idx += 1
         if args.once:
             LOG.info("--once 模式：本轮完成，退出")
             return 0
         sleep_sec = max(sleep_sec, min_sleep)
-        _resident_state(round_no, cur_pack_idx - 1, consec, "正常收工")
-        LOG.info("等待 %.1f 分钟后跑下一批（%s）", sleep_sec / 60,
-                 "合池：三包前 N 个" if getattr(args, "pool", False)
-                 else packs[cur_pack_idx % len(packs)])
+        _resident_state(round_no, consec, "正常收工")
+        LOG.info("等待 %.1f 分钟后跑下一池（全局前 --limit %s）",
+                 sleep_sec / 60, args.limit)
         # ★★ 2026-09-18：**这就是那 45 分钟的睡眠** —— autoheal 误杀就发生在这里。
         #   包一层 `PHASE_IDLE` 心跳之后，心跳**全时新鲜** ⇒ healthcheck 不再判死；
         #   而 `batch_alive()` 看到 `phase=idle` ⇒ 知道该让位（而不是「永远在跑」）。
@@ -3638,7 +3565,6 @@ def main() -> int:
     #     一直判「在跑」——而「永远判在跑 ⇒ 静默永久停工」正是本仓最怕的形状。
     #     ⇒ 收尾**一律写 `idle`**，与上面清心跳同一个目的：把「我不在了」说清楚。
     write_state({"running_pid": None, "last_end_ts": time.time(),
-                 "last_pack_idx": (cur_pack_idx - 1) % len(packs),
                  "consec_abort": int(consec[0]),
                  "consec_backoff": int(consec[1]),
                  "mode": "resident",

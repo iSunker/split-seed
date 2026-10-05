@@ -261,9 +261,14 @@ if YML and isinstance(svcs.get("drive-loop"), dict):
     ck("★ ①l 挂的是整个 compose 根 + 整个媒体卷（不是挑子目录）",
        _newroot in _vol_s and "/volume1/video" in _vol_s, _vol_s)
     #   ★★ ①l3 三条路径环境变量必须都在 environment 里（代码入镜像的接线，缺一则静默退化）
+    #   ★★ ①l2 DRIVE_LIMIT 在 environment 里（覆盖口，不是挂载）；
+    #   ★★ 2026-10-05「去掉包的闸门」：`DRIVE_PACKS` **已随名单一起退休** ⇒ 断言反转成
+    #      「**不再**出现 DRIVE_PACKS」（防止有人把它加回来当闸门）。
     _env_s = " ".join(str(v) for v in _envs)
-    ck("★★ ①l2 DRIVE_PACKS / DRIVE_LIMIT 在 environment 里（覆盖口，不是挂载）",
-       "DRIVE_PACKS" in _env_s and "DRIVE_LIMIT" in _env_s, _env_s)
+    ck("★★ ①l2 DRIVE_LIMIT 在 environment 里（覆盖口，不是挂载）",
+       "DRIVE_LIMIT" in _env_s, _env_s)
+    ck("★★ ①l2b DRIVE_PACKS **不在** environment 里（名单已退休，别加回来）",
+       "DRIVE_PACKS" not in _env_s, _env_s)
     ck("★★ ①l3 DRIVE_STATE_DIR / COMPOSE_DIR / RESEED_STATE_DB 三接线都在 environment 里",
        "DRIVE_STATE_DIR=/state" in _env_s and f"COMPOSE_DIR={_newroot}" in _env_s
        and "RESEED_STATE_DB=" in _env_s, _env_s)
@@ -554,36 +559,34 @@ ck("★ ③i 有前置闸门：读 .drive-loop.state 并能在「另一条路在
 ck("★ ③j 闸门**不读 pid**，读的是 mode（跨 pid 命名空间判 pid 是假信号）",
    '"mode"' in _SH or "'mode'" in _SH, "没引用 mode")
 
-# ---- ③k ★★ `--pool` 的开关状态（`e404b1ca#6` ①，用户 2026-09-21 拍：**开**）----
-#   ★ 为什么要钉它：`--pool` **不写进 `drive-loop.py` 的默认值**（那是产品决定，
-#     理由在 `drive-loop.py:2961` 那段），只能**在入口脚本里显式写** ⇒
-#     入口脚本一改（或有人"顺手统一两份脚本"）就会**静默改变额度分配口径**，
-#     而**不报错、日志一切正常** —— 只是欠账不再被优先吃掉。
-#   ★★ 判据要**成对**：resident **必须带**、nas **必须不带**。
-#     少了任一半，「有人给两份都加上 / 都删掉」就不会被抓住。
-#   ★ 用上面那个 `_argline` 按**参数行**取，不在全文搜（注释里也讲了 `--pool`，
-#     全文搜恒真 —— ③f 那条注释里记过同一个坑）。
-ck("★★ ③k run-resident.sh **带 `--pool`**（跨包合池：--limit 变全局，欠账优先被吃）",
-   _argline(RESIDENT, "--pool") is not None,
-   "resident 的参数行上没有 --pool —— 额度分配退回「每包各 50」")
+# ---- ③k ★★ `--pool` 已**退休**（2026-10-05「去掉包的闸门」，用户拍）----
+#   ★★ 判据**反转**：resident **不许**带 `--pool`，也**不许**带 `--packs`。
+#     池路径现在是**唯一路径**（drive-loop.py 永远扫 `pack` 表），`--pool` 参数已删；
+#     两份入口都不该再有它。少了这条反向钉子，有人把 `--pool` 加回来
+#     （对着已删的参数）会**静默失效**（argparse 直接报错或参数无效）——
+#     正是"参数看着生效、其实没生效"的形状（`A.11`）。
+ck("★★ ③k run-resident.sh **不带** `--pool`（参数已删，池是唯一路径）",
+   _argline(RESIDENT, "--pool") is None,
+   "resident 的参数行上还有 --pool —— 该参数已退休")
+ck("★★ ③k2 run-resident.sh **不带** `--packs`（名单已退休）",
+   _argline(RESIDENT, "--packs") is None,
+   "resident 的参数行上出现了 --packs —— 名单已退休，别加回来")
 
-ck("★★ ③l 但 drive-loop-nas.sh **不带** `--pool`（两份入口刻意分叉，"
-   "那份已停用；不给它加是为了让改动面最小）",
-   _argline(NAS_SH, "--pool") is None,
-   "run.sh 上也出现了 --pool —— 这是**没被拍过**的改动（那份的定位是留痕/备份）")
+ck("★★ ③l drive-loop-nas.sh（run.sh）也**不带** `--pool` / `--packs`",
+   _argline(NAS_SH, "--pool") is None and _argline(NAS_SH, "--packs") is None,
+   "run.sh 上出现了 --pool / --packs —— 两者都已退休")
 
-#   ★ ③m：`--pool` 必须在 `"$@"` **之前** —— 否则用户能在命令行上**覆盖**它
-#     （argparse 取最后一次）。这是有意的：`--pool` 是 store_true，
-#     **没法用 `"$@"` 关掉** ⇒ 想临时关只能改这一行（注释里也写了这句）。
-#     ⇒ 判据钉"它在 $@ 之前"，让"位置"这件事有据可查。
-_pool_line = [l for l in _SH.splitlines()
-              if l.strip().startswith("--pool") and not l.strip().startswith("#")]
-_argv_line_idx = [i for i, l in enumerate(_SH.splitlines())
-                  if l.strip().startswith('"$@"')]
-ck("★ ③m `--pool` 的**参数行位置**在 `\"$@\"` 之前",
-   bool(_pool_line) and bool(_argv_line_idx)
-   and _SH.splitlines().index(_pool_line[0]) < _argv_line_idx[0],
-   f"pool_line={_pool_line!r} argv_idx={_argv_line_idx!r}")
+#   ★ ③m：drive-loop.py 的 argparse **不再**定义 `--pool` / `--packs` / `--batch`
+#     （③k 钉入口脚本，③m 钉源头 —— 两处都钉，改一处会被另一处抓住）。
+#   ★ 用 DOCKER_PY（上面已定义成 pathlib 路径）读源码；两种引号写法都查
+#     （`add_argument("--x")` 与 `add_argument('--x')`），避免漏掉单引号那种。
+_dl_src = DOCKER_PY.read_text(encoding="utf-8") if DOCKER_PY.is_file() else ""
+for _flag in ("--pool", "--packs", "--batch"):
+    _dq = 'add_argument("%s"' % _flag
+    _sq = "add_argument('%s'" % _flag
+    _present = (_dq in _dl_src) or (_sq in _dl_src)
+    ck("★ ③m drive-loop.py 的 argparse 不再有 " + _flag, not _present,
+       "argparse 里还定义着 " + _flag + " —— 该参数已退休")
 
 # ==========================================================================
 print("\n=== ④ 宿主入口那份**没被改**（生产在跑，不该动）===")
@@ -1054,6 +1057,80 @@ if _TREE is not None:
         #     （症状是"常驻模式起不来"，比写错值更显眼，但仍然该钉）。
         ck("★ ⑨a-2 `phase` **有**默认值（没有 ⇒ 三处不传参的调用当场 TypeError）",
            "phase" in _map, f"形参 {_pos} / 默认 {list(_map)}")
+
+        # ---- ⑨a-3 ★★ `_resident_state(...)` 的**每个调用点**都要形状对得上 ----
+        #   ★★ 为什么必须单独钉这个（2026-10-05 实测踩到）：去掉「包的闸门」时，
+        #      `_resident_state` 的形参从 `(round_n, pack_idx, streak, note, phase=)`
+        #      **删掉了 `pack_idx`** ⇒ 变成 `(round_n, streak, note, phase=)`。
+        #      **四处调用里三处改对了，启动那处漏改** —— 它仍写
+        #      `_resident_state(0, -1, consec, "启动")`：位置全串了一位，
+        #      `streak` 收成 `-1`（int）⇒ 函数体 `int(streak[0])` 当场
+        #      `TypeError: 'int' object is not subscriptable`。
+        #   ★★ 危害形状：这条只在**常驻/`--dry-run` 路径**炸，而 `--once` 正常路径
+        #      **不走它** ⇒ 常规跑批全绿；一上常驻（`restart: unless-stopped`）就
+        #      **崩溃重启**，日志里是一串 traceback —— 属"改一处漏一处"的经典形状。
+        #   ★★ 判据：把 `_resident_state` 的**形参名表**取出来，遍历 `main()` 里
+        #      **每一个** `_resident_state(...)` 调用，断言：
+        #        ① 位置参数个数 ≤ 形参个数（多了 ⇒ 又多传了一个已删的形参）；
+        #        ② `note`（第 3 个位置实参，或 `note=`）是**字符串字面量**
+        #           （`"启动"`/`"dry-run"`/… 都是常量）—— 上面那个 bug 里
+        #           `note` 收到了**第 4 个位置实参 `"启动"` 之外的 `consec` 变量**，
+        #           靠"note 必须是字面量"能抓住；
+        #        ③ `phase`（第 4 个位置实参，或 `phase=`）**若给出**，必须是
+        #           已知的 phase 串（`"idle"`/`"running"`）—— bug 里它收到 `"启动"`。
+        #      ★ 用 AST 而不是字符串/正则：注释和 docstring 里满是 `_resident_state`。
+        _POS_NAMES = [x.arg for x in _rs.args.args if x.arg != "self"]
+        _n_pos = len(_POS_NAMES)
+
+        def _phase_ok(node: ast.AST) -> bool:
+            """第 4 个位置实参 / `phase=` 值如果是字面量，得是已知 phase。"""
+            v = None
+            if (isinstance(node, ast.Call) and len(node.args) >= 4
+                    and not isinstance(node.args[3], ast.Starred)):
+                v = node.args[3]
+            for kw in (node.keywords if isinstance(node, ast.Call) else []):
+                if kw.arg == "phase":
+                    v = kw.value
+            if v is None:
+                return True                     # 没给 phase ⇒ 用默认值，合法
+            #   只看字面量：给变量（如 `_phase`）时无从静态判定，放过。
+            return (isinstance(v, ast.Constant)
+                    and isinstance(v.value, str)
+                    and v.value in ("idle", "running"))
+
+        def _note_ok(node: ast.AST) -> bool:
+            """第 3 个位置实参 / `note=` 值应是字符串字面量。"""
+            v = None
+            if (isinstance(node, ast.Call) and len(node.args) >= 3
+                    and not isinstance(node.args[2], ast.Starred)):
+                v = node.args[2]
+            for kw in (node.keywords if isinstance(node, ast.Call) else []):
+                if kw.arg == "note":
+                    v = kw.value
+            if v is None:
+                return True
+            return isinstance(v, ast.Constant) and isinstance(v.value, str)
+
+        _rs_calls = [n for n in ast.walk(_TREE)
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                     and n.func.id == "_resident_state"]
+        ck("前提：找得到 `_resident_state` 的调用点（≥4 处：启动/dry-run/无动作/异常/收工）",
+           len(_rs_calls) >= 4, f"找到 {len(_rs_calls)} 处")
+        _bad_arity = [ast.unparse(n) for n in _rs_calls
+                      if not (n.keywords and n.keywords)
+                      and len(n.args) > _n_pos]
+        ck("★★ ⑨a-3 每个 `_resident_state(...)` 调用的**位置参数个数 ≤ 形参个数**"
+           "（多了 = 又传了一个已删的形参）",
+           not _bad_arity,
+           f"形参 {_POS_NAMES}（{_n_pos} 个）；越界调用：{_bad_arity}")
+        _bad_note = [ast.unparse(n) for n in _rs_calls if not _note_ok(n)]
+        ck("★★ ⑨a-3b 每个调用的第 3 位实参 / `note=` 是**字符串字面量**"
+           "（位置串位时这里会收到变量 ⇒ 红）",
+           not _bad_note, f"非字面量的调用：{_bad_note}")
+        _bad_phase = [ast.unparse(n) for n in _rs_calls if not _phase_ok(n)]
+        ck("★★ ⑨a-3c 每个调用若给 `phase`（第 4 位实参 / `phase=`）必须是"
+           " `\"idle\"`/`\"running\"`（传了 `\"启动\"` 这种 = 位置串位 ⇒ 红）",
+           not _bad_phase, f"非法 phase 的调用：{_bad_phase}")
 
     # ---- ⑨b 三处收尾都**显式**写 `"phase"`（整体覆盖，不写=删掉该键）----
     #   ★★ 为什么是"整体覆盖"这条性质在起作用：三处 `write_state({...})` 都是

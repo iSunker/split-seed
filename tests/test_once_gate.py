@@ -57,7 +57,7 @@ def read_state():
 
 def args_ns():
     return argparse.Namespace(
-        db=str(TMP / "state.db"), indexers="HDFans", limit=50, batch=None,
+        db=str(TMP / "state.db"), indexers="HDFans", limit=50,
         include_cooldown=False, cadence_days=180, cadence=None,
     )
 
@@ -67,8 +67,11 @@ def args_ns():
 #   桩没跟上 ⇒ ⑨ 那条"stats=None 也要巡检"**静默**变成 0 次调用、报红）。
 #   ★ 为什么不用 `lambda *a, **k`：那样签名漂了也不会红 —— 而"参数加了、桩没跟上"
 #     正是这次要防的形状（同 `ck` 同名不同语义那类坑）。
+# ★★ 2026-10-05（去掉闸门）：`run_round` 的 `packs` 形参已删 ⇒ 桩同步收窄成
+#   `(pack, args, api_key)`。**又踩到同一个形状**（参数减了、桩没跟上），
+#   所以这条注释留在原地、桩签名逐年对账。
 _next_stats = [S.DriveStats(ok=50)]
-dl.run_round = lambda pack, packs, args, api_key: _next_stats[0]
+dl.run_round = lambda pack, args, api_key: _next_stats[0]
 dl.alert_if_all_done = lambda *a, **k: None
 dl.emit = lambda *a, **k: False
 dl.init_notifier = lambda *a, **k: None
@@ -76,15 +79,14 @@ dl.init_notifier = lambda *a, **k: None
 
 def run_once(now=None):
     write_state({**read_state(), "last_end_ts": now if now is not None else time.time()})
-    return dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k",
-                         dl.MIN_SLEEP)
+    return dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 
 
 print("== ① 闸门取 max(min_sleep, last_sleep_sec)：退避间隔必须真的挡人 ==")
 # 场景统一为「上批 40 分钟前结束」。min_sleep=30 分钟，所以单靠下限是可以跑的。
 write_state({"last_end_ts": time.time() - 40 * 60, "last_sleep_sec": 0.0,
-             "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+             "consec_abort": 0, "running_pid": None})
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  无退避证据 / gap=40分 → 跑（last_end 被推新，说明进过批）",
    read_state()["last_end_ts"] > time.time() - 60, True)
 ck("  跑完写回的间隔 = 45 分钟（批次无退避）",
@@ -95,7 +97,7 @@ for last_sleep, expect_skip in ((dl.SNOOZE_SLEEP, True), (dl.BACKOFF_SLEEP, True
     before = time.time() - 40 * 60
     write_state({"last_end_ts": before, "last_sleep_sec": last_sleep,
                  "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-    dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+    dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
     ck(f"  last_sleep={last_sleep / 60:.0f}分钟 / gap=40分 → 跳过（last_end 没动）",
        read_state()["last_end_ts"], before)
 
@@ -103,27 +105,27 @@ print("\n== ② 退避真的让下一批等更久：gap=70 分钟时 2 小时档
 before = time.time() - 70 * 60
 write_state({"last_end_ts": before, "last_sleep_sec": dl.BACKOFF_SLEEP,
              "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  70 分钟 < 2 小时 → 仍跳过", read_state()["last_end_ts"], before)
 
 before = time.time() - 130 * 60
 write_state({"last_end_ts": before, "last_sleep_sec": dl.BACKOFF_SLEEP,
              "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  130 分钟 > 2 小时 → 放行", read_state()["last_end_ts"] > time.time() - 60, True)
 
 print("\n== ③ 上批撞退避（waited 20 分钟）→ 落盘的间隔确实是 2 小时 ==")
 _next_stats[0] = S.DriveStats(ok=50, backoff_hits=2, waited_sec=1200.0)
 write_state({"last_end_ts": time.time() - 40 * 60, "last_sleep_sec": 0.0,
              "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  last_sleep_sec 落盘 = 7200", read_state()["last_sleep_sec"], dl.BACKOFF_SLEEP)
 
 print("\n== ④ 喷嚏（退避 55 秒）→ 落盘 45 分钟，不该罚 2 小时 ==")
 _next_stats[0] = S.DriveStats(ok=50, backoff_hits=1, waited_sec=55.0)
 write_state({"last_end_ts": time.time() - 40 * 60, "last_sleep_sec": 0.0,
              "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  last_sleep_sec 落盘 = 2700", read_state()["last_sleep_sec"], dl.BASE_SLEEP)
 
 print("\n== ⑤ 本批无动作（stats=None）→ 落盘 0，退回下限，不留旧的退避 ==")
@@ -133,7 +135,7 @@ _next_stats[0] = None
 write_state({"last_end_ts": time.time() - 3 * 3600,
              "last_sleep_sec": dl.BACKOFF_SLEEP,          # 上一批留下的旧值
              "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  旧退避被清掉（否则会永远卡在 2 小时）", read_state()["last_sleep_sec"], 0.0)
 
 print("\n== ⑥ 心跳残留处理：跑完 heartbeat_ts 必须被清掉 ==")
@@ -186,7 +188,7 @@ def skip_msg(last_sleep, min_sleep=None, gap_min=2.7):
         write_state({"last_end_ts": time.time() - gap_min * 60,
                      "last_sleep_sec": last_sleep, "last_pack_idx": -1,
                      "consec_abort": 0, "running_pid": None})
-        dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", min_sleep)
+        dl.once_round(args_ns(), "k", min_sleep)
     finally:
         dl.LOG = _real_log
     hit = [m for m in rec.msgs if "跳过本轮" in m]
@@ -221,89 +223,68 @@ dl.check_farm = lambda **kw: (farm_calls.append(kw), "农场巡检：无漂移")
 _next_stats[0] = None
 write_state({"last_end_ts": time.time() - 3 * 3600, "last_sleep_sec": 0.0,
              "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  没待搜（stats=None）→ 巡检**照样**被调用", len(farm_calls), 1)
 
 farm_calls.clear()
 _next_stats[0] = S.DriveStats(ok=5)
 write_state({"last_end_ts": time.time() - 3 * 3600, "last_sleep_sec": 0.0,
              "last_pack_idx": -1, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024"], args_ns(), "k", dl.MIN_SLEEP)
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
 ck("  真跑了批次 → 这里**不**重复调（那条路由 after_batch_reports 负责）",
    len(farm_calls), 0)
 
-print("\n== ⑩ ★ 轮转存的是**下标不是名字** —— 顺序即调度 ==")
-# 背景（#40，2026-09-13）：`mbf` 曾被排进 `PACKS_DEFAULT` 的**中间**（index 1），
-# 为的是让**已经落盘**的 `last_pack_idx=0`（含义仍是"dc-collection 刚跑完"）
-# 保持不变、而**下一批**就轮到 mbf（一批就拿到读数，排在最末要等两三批）。
-# 整套推理押在「once_round 按下标轮转」这个行为上 ——
-# 而它此前**一个断言都没有**（本节所有用例都传 `last_pack_idx: -1`）。
-# ★ 所以这里既钉轮转本身，也钉**它的代价**：改这个常量的顺序 = 偷偷改"下一批跑谁"。
+print("\n== ⑩ ★★ 闸门已拆：once_round / run_round / argparse 里**没有**名单和轮换 ==")
+# 背景（2026-10-05「去掉包的闸门」，用户拍）：
+#   · 删 `--packs` / `PACKS_DEFAULT` / `DRIVE_PACKS` / `packs_from_arg`
+#   · 删 `--pool` 开关（池路径 = 唯一路径）
+#   · 删 `--batch` 与非池 `apply_batch` 分支
+#   · 删 `once_round` 的 `last_pack_idx` 取模轮换 + 落盘
+#   · `run_round` 的 `packs` 形参已删，池源 = `require_packs(st)` = `pack` 表全部包
 #
-# ★★ 2026-09-21 修正：这一段原先**直接拿 `dl.PACKS_DEFAULT` 当输入**
-#   （`PACKS3 = dl.PACKS_DEFAULT.split(",")` 然后断言它 == 三个包）。
-#   ⇒ ★ 那是**把"机制"和"产品决定"焊死**：用户拍"把 dc/mbf 移出"时，
-#     机制一条没坏，这一段却红了 —— 而**红了是对的**（它真的押在这个值上），
-#     只是**问错了问题**：它想问"轮转按下标吗"，却顺带断言了"名单是哪三个"。
-#   ⇒ ★ 拆成两半：
-#     ① 机制 —— 用**固定的合成名单**测（下面 `FAKE3`），**与生产名单解耦**，
-#        任何一次改名单都不会再让它红；
-#     ② 名单本身 —— **单独一条断言**，明写"这条随产品决定变"。
-FAKE3 = ["dc-collection", "mbf", "frds-top250-2024"]   # ★ 合成的，不是生产名单
-ck("★★ 轮转按**下标**、与名单内容无关（合成名单：0→1→2→0）—— 机制",
-   [FAKE3[(i + 1) % 3] for i in range(3)],
-   ["mbf", "frds-top250-2024", "dc-collection"])
+# ★ 判据不是"文本里像不像"，而是**这些名字在运行期不再存在 / 签名变了**。
+_src_all = open(SRC, encoding="utf-8").read()
+for _name in ("packs_from_arg", "PACKS_DEFAULT", "DRIVE_PACKS"):
+    ck(f"  名字 {_name} 在 drive-loop.py 里**不再出现**（含代码，注释可提旧事）",
+       (_name in _src_all.replace("`%s`" % _name, "")), False)
 
+# 池源就是 pack 表（唯一枚举口）：`pool_packs` / `require_packs` 存在且读 `pack` 表
+for _fn in ("pool_packs", "require_packs"):
+    ck(f"  池源函数 {_fn}() 存在", hasattr(dl, _fn), True)
+ck("  `require_packs` 空表抛 NoPacksRegistered（不静默算空）",
+   hasattr(dl, "NoPacksRegistered"), True)
+
+# once_round 签名：只剩 (args, api_key, min_sleep) —— `packs` 形参已删
+import inspect  # noqa: E402
+_sig = list(inspect.signature(dl.once_round).parameters)
+ck("★★ once_round 签名 = (args, api_key, min_sleep)（packs 形参已删）",
+   _sig, ["args", "api_key", "min_sleep"])
+_sig_rr = list(inspect.signature(dl.run_round).parameters)
+ck("★★ run_round 签名 = (pack, args, api_key)（packs 形参已删）",
+   _sig_rr, ["pack", "args", "api_key"])
+
+# argparse：`--packs` / `--pool` / `--batch` 三个都**不该**再是参数
+_main_src = inspect.getsource(dl.main)
+for _flag in ("--packs", "--pool", "--batch"):
+    ck(f"  argparse 里没有 {_flag}",
+       ('"%s"' % _flag) in _main_src or ("'%s'" % _flag) in _main_src, False)
+
+# ★★ 落盘状态**不再含 `last_pack_idx`** —— 跑一批之后状态文件里不该有它
 _seen = []
 
 
-def _capture(pack, packs, args, api_key):
+def _capture(pack, args, api_key):
     _seen.append(pack)
     return S.DriveStats(ok=1)
 
 
 dl.run_round = _capture
-for _start, _want in ((0, "mbf"), (1, "frds-top250-2024"), (2, "dc-collection")):
-    _seen.clear()
-    write_state({"last_end_ts": time.time() - 3 * 3600, "last_sleep_sec": 0.0,
-                 "last_pack_idx": _start, "consec_abort": 0, "running_pid": None})
-    dl.once_round(FAKE3, args_ns(), "k", dl.MIN_SLEEP)
-    ck(f"  last_pack_idx={_start} → 下一批跑 {_want}", _seen[0], _want)
-    ck(f"    ↳ 落盘 last_pack_idx={(_start + 1) % 3}",
-       read_state()["last_pack_idx"], (_start + 1) % 3)
-
-# ★ 代价：同一个 `last_pack_idx=0`，只把 mbf 挪到末尾 → 下一批从 mbf 变成 frds。
-#   这不是"测个边角" —— 它是「为什么 mbf 必须放中间」的**证据**：
-#   如果哪天有人为了"整齐"把 mbf 挪到最后，读数会**晚两三批**才拿到，
-#   而日志上看不出任何异常。
-_seen.clear()
+_next_stats[0] = S.DriveStats(ok=1)
 write_state({"last_end_ts": time.time() - 3 * 3600, "last_sleep_sec": 0.0,
-             "last_pack_idx": 0, "consec_abort": 0, "running_pid": None})
-dl.once_round(["dc-collection", "frds-top250-2024", "mbf"], args_ns(), "k", dl.MIN_SLEEP)
-ck("★ 同一个 last_pack_idx=0，mbf 挪到末尾 → 下一批变成 frds（顺序即调度）",
-   _seen[0], "frds-top250-2024")
-
-# --------------------------------------------------------------------------- #
-# ⑩b ★★★ 生产名单本身（★ 这条**随产品决定变**，不是机制判据）
-# --------------------------------------------------------------------------- #
-#   ★★ 2026-09-21：用户拍「`dc-collection` 与 `mbf` 移出」（全窗口 9 天读数：
-#     两个包 `rounds≥8` / `ok>0` / `newly_seeding==0` ⇒ `no-yield`；
-#     而 `frds` 有产出 ⇒ 留）⇒ 名单缩回 **1** 个。
-#   ★ 这条**故意写死**：名单变了它就红 ⇒ 逼下一次改名单的人**看见这里**，
-#     而不是"测试跟着悄悄改"。★ 它红的时候**不一定是 bug** —— 先去看
-#     `drive-loop.py` 那段注释里的**依据还在不在**（依据也有保质期）。
-PACKS = dl.PACKS_DEFAULT.split(",")
-ck("★★★ 生产名单 = 只剩 frds 一个（2026-09-21 用户拍：dc/mbf 移出）—— ★ 随产品决定变",
-   PACKS, ["frds-top250-2024"])
-ck("★ 且名单里**不含**已判 no-yield 的两个包 —— 差集为空",
-   [p for p in PACKS if p in ("dc-collection", "mbf")], [])
-# ★ 缩短名单的**副作用**：`last_pack_idx` 是下标 ⇒ 长度变了，"下一批跑谁"会跟着变。
-#   实测落盘值 `10` 是**越界脏值** ⇒ 归一后：
-#     旧 len=3：(10+1)%3 = 2 → frds ；新 len=1：(10+1)%1 = 0 → frds
-#   ⇒ ★ 这次缩短**恰好**把下一批留在 frds 上。换一个落盘值就会跳包。
-_pli = 10   # ★ 实测值（2026-09-21，NAS 的 .drive-loop.state）
-ck("★★ 缩短名单会改「下一批跑谁」—— 但**这次**从 frds 仍落在 frds",
-   PACKS[( _pli + 1) % len(PACKS)], "frds-top250-2024")
+             "consec_abort": 0, "running_pid": None})
+dl.once_round(args_ns(), "k", dl.MIN_SLEEP)
+ck("  批次标签恒为 'pool'（没有「轮到谁」）", _seen, ["pool"])
+ck("★★ 落盘状态里**不再有** last_pack_idx", "last_pack_idx" in read_state(), False)
 
 # =========================================================================== #
 # ⑧ ★★ 容器里的 pid 那一半必须停用（`#58` D1，2026-09-17）
