@@ -61,21 +61,23 @@
 #        · `build-farm.sh` 的 `COMPOSE_DIR` 默认值、以及它 `mkdir -p` 的清单目录
 #          `$COMPOSE_DIR/hlink`（`--verify` 会往那儿写 `*.missing.tmp`）⇒ **必须可写**。
 #        · `--env "$COMPOSE_DIR/.env"` —— TORZNAB 那几个 apikey 的来源。
-#        · 告警出栈口 `$COMPOSE_DIR/notify/spool/` —— **不挂 = 容器发的告警没人收**
-#          （NAS 侧 `notify-spool.sh` 每 5 分钟来取的是这个目录）。
 #        · 闸门与台账的全部状态，都在 `$COMPOSE_DIR/drive-loop/scripts/`：
-#          `.drive-loop.state` / `.farm-check.state` / `.notify.state` /
+#          `.drive-loop.state` / `.farm-check.state` /
 #          `.reconcile.state` / `.daily-report.state` / `drive-loop.log` / `attempts.log`。
 #          ★★ 这几个**最容易被漏**（它们不在 `drive-loop/hlink/` 里），而漏了的后果是
 #             **静默**的：对账/无人认领的基线会被当成「首次读数」重新记一遍。
+#          （★ 原先清单里还有 `.notify.state` 与"告警出栈口 notify/spool/"
+#           ——通知写侧已于 2026-10-05 整体砍掉，二者都不再存在。）
 #        · sidecar 状态库 `$COMPOSE_DIR/drive-loop/hlink/state.db`（生产独有）。
 #          ★ 本包装刻意**不设** `RESEED_STATE_DB` —— 让它走代码里
 #            `DEFAULT_DB = ROOT/"hlink"/"state.db"`（`ROOT = HERE.parent`）那条推导。
 #            它推导对了，本身就是「挂载 1:1 对上了」的自证；另设一个环境变量
 #            等于把这条自证换成「我看过了」。
 #        ★ 代价要写明：挂整个 compose 目录 = 把 `.env`、`prowlarr/`（cookie + db）、
-#          `cross-seed/`（含 API key）、`notify/notify.conf`（邮箱口令）一并交给这个
-#          容器。这是**新扩大的爆炸半径**，B/C 两条路都躲不掉（要 1:1 就必然如此）。
+#          `cross-seed/`（含 API key）一并交给这个容器。这是**新扩大的爆炸半径**，
+#          B/C 两条路都躲不掉（要 1:1 就必然如此）。
+#          （★ 原清单里还有 `notify/notify.conf`＝邮箱口令 —— 通知写侧已砍，
+#           那份文件不再存在。）
 #
 #   ② `$VOL1:$VOL1`                （= /volume1/video）
 #      媒体卷，同理必须同名同路径：`.env` 里 `DATA_DIRS` / `LINK_DIR` / `FARM_SOURCES`
@@ -126,7 +128,7 @@
 #   镜像里**有** PyYAML（Dockerfile 的 `pip install -r requirements.txt` 是 build 期
 #   保证），但**这个结论其实用不上** —— 更硬的理由是
 #   **`drive-loop.py` 的整个 import 闭包是纯标准库**（`orchestrator/__init__.py`
-#   无 import；`orchestrator/state.py` 与 `scripts/notify.py` 也只 import 标准库）。
+#   无 import；`orchestrator/state.py` 也只 import 标准库）。
 #   于是它**换任何自带 python3 的镜像都成立**，不绑定 `reseed-orchestrator`。
 #   PyYAML 只被 `orchestrator/config.py` 用，那条路径本包装不走。
 #   ⇒ 下次别再问「镜像里有没有 PyYAML」；问「import 闭包里非标准库的有没有」，

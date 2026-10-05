@@ -29,7 +29,7 @@
 # 为什么这条要单独拿出来说：本项目其余日志其实**都已经在自我轮转**——
 #   ① drive-loop.log        RotatingFileHandler(5MB × 5)        ≈ 30 MB 上限
 #   ② cross-seed/logs/*     按天轮转 + 保留 14 天                ≈ 0.9 GB 稳态
-#   ③ notify/log/*.tsv      不清，但一天 137 字节                ≈ 50 KB/年
+#   ③（原 notify/log/*.tsv 已于 2026-10-05 随通知写侧整体砍掉，不再产生）
 # 所以**容器日志才是唯一没上限的那个**（NAS 的 /volume1 只剩约 20 GB）。
 # 照"给日志加轮转"的直觉去动 ①②，等于做一个**已经存在的东西**。
 #
@@ -212,24 +212,24 @@ services:
   # ★ 挂载为什么是**整目录 1:1**、不是挑几个子目录
   # ---------------------------------------------
   #   代码里的路径**全是绝对路径**：`CROSSSEED_DIRS[0]`（硬编码）、
-  #   `build-farm.sh` 的 `COMPOSE_DIR`、`--env "$COMPOSE_DIR/.env"`、告警出栈口
-  #   `notify/spool/`、以及 `ROOT = HERE.parent` 那条推导。
+  #   `build-farm.sh` 的 `COMPOSE_DIR`、`--env "$COMPOSE_DIR/.env"`、
+  #   以及 `ROOT = HERE.parent` 那条推导。
   #   ⇒ **挑着挂不会报错，只会静默退化**（`first_existing()` 返回 `None` + 一行 warning）。
   #   ★ 最容易漏的是 `drive-loop/scripts/` 下的 `.state` 文件（**不在** `hlink/` 里），
   #     漏了的后果是**静默**的：对账 / 无人认领的基线会被当成「首次读数」重新记一遍。
-  #     ★ 2026-09-17 更正：这里原写「**五个**」，**实测是六个** ——
-  #       `.daily-report` / `.drive-loop` / `.farm-check` / `.linkguard` / `.notify` / `.reconcile`。
+  #     · 2026-09-17 更正：这里原写「**五个**」，**实测是六个** ——
+  #       `.daily-report` / `.drive-loop` / `.farm-check` / `.linkguard` / `.reconcile`
+  #       （`.notify.state` 随通知写侧于 2026-10-05 砍掉，不再是第 6 个）。
   #       其中 `.linkguard.state` 最大（约 **827 KB**，那是基线本身）。
   #       ⇒ 清单以 `scripts/chk58.sh` 的 `[3]` 段为准（它会逐个点名 + 报字节数）。
   #
   # ★★ 爆炸半径（写明，不是没看见）
   # -----------------------------
   #   挂整个 compose 目录 = 把 `.env`、`prowlarr/`（cookie + db）、
-  #   `cross-seed/`（含 API key）、`notify/notify.conf`（邮箱口令）一并交给这个容器。
-  #   ★★ 2026-10-04 更新：通知模块已整体剥离（`重构方案.md` §11）⇒ 本条里
-  #     `notify/notify.conf` 这份"邮箱口令"**随之迁出**（NAS 侧发信脚本仍读 DSM
-  #     自己的 SMTP 配置）。挂载仍是整目录 1:1 未改（那是 push/pull 重构的事）。
-  #   但**不能**减小半径。
+  #   `cross-seed/`（含 API key）一并交给这个容器。
+  #   ★★ 2026-10-04/05：通知模块整体剥离并随后砍掉写侧 ⇒ 原先这里提到的
+  #     `notify/notify.conf`（邮箱口令）**已不存在于挂载区**（迁去独立项目 +
+  #     删写侧），半径里少了这一项；但**不能**减小半径（其余仍在）。
   #
   # ★ 用户与属主：**不加 `user:`**（与另外三个服务不同，这是刻意的）
   # -------------------------------------------------------------
@@ -534,11 +534,12 @@ services:
       # 而 drive-loop 一轮是分钟级 ⇒ 10 分钟足够覆盖「停了没人管」这个窗口。
       - WATCH_INTERVAL=600
       - WATCH_COMPOSE_DIR=/volume2/docker_ssd/reseed
-      # ★★ 2026-10-04：通知模块已整体剥离（见 `重构方案.md` §11）。`NOTIFY=0` ⇒
-      #   巡检**照样拉起容器**，但**不往 spool 投告警**。默认 `1`（保留投递能力）。
-      #   ★ 等项目 B（邮件通知告警）接管告警编排后，把这里改成 `NOTIFY=0`；
-      #     现在先留 1，让 NAS 上仍留着的 `notify-spool.sh` 继续发巡检告警。
-      - NOTIFY=${NOTIFY:-1}
+      # ★★ 2026-10-05：通知告警**整体砍掉**（写侧 spool + `notify-spool.sh` 都已撤）。
+      #   `NOTIFY=0` ⇒ 巡检**照样拉起容器**，但**不写任何告警事件**（spool 已不存在）。
+      #   ★ 原本默认 `1` 是留给 NAS 上那份 `notify-spool.sh` 发巡检告警；现在
+      #     写侧已删 ⇒ 默认改 `0`，让巡检专注"拉起"这一件事。
+      #   ★ 判据：`NOTIFY` 只管「投不投告警」，**不管「拉不拉」** —— 两者分开取证。
+      - NOTIFY=${NOTIFY:-0}
       # ★★ 2026-10-01：项目 B（qbittorrent-reseed）的 compose 目录 —— 看护器现在也盯
       #   `qbittorrent-reseed`（它原不在本栈，停摆 3h47m 没人拉起）。两条 `up -d` 要在
       #   **各自的目录**里跑（项目 A 有 profile、项目 B 没有），故两个目录都要挂进去。

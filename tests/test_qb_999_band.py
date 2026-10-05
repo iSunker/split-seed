@@ -241,9 +241,23 @@ D.RECONCILE_FILE = pathlib.Path(_td2) / ".reconcile.state"
 _sent: dict = {}
 
 
-def _fake_emit(kind, title, body="", *, key=None, metrics=None):
-    _sent.update(kind=kind, title=title, body=body, metrics=metrics or {})
-    return True
+class _FakeLog:
+    """★ 2026-10-05：通知写侧已砍，`report_daily` 不再 `emit()`，改 `LOG.info(正文)`
+    ⇒ 这里换成捕获日志正文（原来接的是 `emit` 的 body）。判据的**语义不变**：
+      仍是"这一段有没有真的进日报"。"""
+    disabled = False
+
+    def info(self, msg, *a, **k):
+        _sent["body"] = (msg % a) if a else msg
+
+    def warning(self, *a, **k):
+        pass
+
+    def debug(self, *a, **k):
+        pass
+
+    def exception(self, *a, **k):
+        pass
 
 
 class _Trend:
@@ -268,17 +282,16 @@ class _Store:
 D.S.StateStore = _Store
 D.S.qbit_all_torrents = lambda u, **kw: [_q("ddd")]
 D.S.qbit_tagged = lambda u, tag, **kw: [{"hash": "x"}] * 5
-D.emit = _fake_emit
-D.LOG.disabled = True
+D.LOG = _FakeLog()
 D.report_daily(argparse.Namespace(db_path=None, db="x.db", qbit_url="http://h:3060"),
                force=True)
 
-ck("正文里有这一节", "qB 卡 999" in _sent["body"], _sent["body"][-300:])
-ck("★ qb_999 进了 metrics（TSV 唯一的入口）", _sent["metrics"].get("qb_999") == 1,
-   repr(_sent["metrics"]))
-ck("★ 分母也在", _sent["metrics"].get("qb_total") == 1, repr(_sent["metrics"]))
-ck("iyuu 那一节没被挤掉", _sent["metrics"].get("iyuu") == 5, repr(_sent["metrics"]))
-ck("kind 仍是 batch（只记账、不告警）", _sent["kind"] == "batch", _sent["kind"])
+ck("日报正文里有这一节", "qB 卡 999" in _sent["body"], _sent["body"][-300:])
+ck("★ 卡 999 的读数进了日报正文（原 TSV 那条路已随通知写侧砍掉）",
+   "卡 999（停滞 > 24h" in _sent["body"], _sent["body"][-300:])
+ck("★ 分母也在（正文里带「分母 N」）",
+   "分母 1" in _sent["body"], _sent["body"][-300:])
+ck("iyuu 那一节没被挤掉", "iyuu" in _sent["body"], _sent["body"][-300:])
 
 _disk = json.loads(D.RECONCILE_FILE.read_text(encoding="utf-8"))
 ck("★★ 跑完一整份日报后，卡 999 的基线**仍在** .reconcile.state 里",

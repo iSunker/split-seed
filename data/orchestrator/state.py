@@ -3224,7 +3224,7 @@ def _qb_auth_header() -> dict[str, str]:
 
     ★ 为什么用**环境变量**而不是参数：这几个函数被 drive-loop / reseed-state 两侧调用，
       签名各不相同；而"用哪把钥匙"是**部署决定**（`.env` 里的 `QB_API_KEY`），
-      经 compose 的 `environment:` 透传 ⇒ 与 `NOTIFY` 同一套形状，不污染每个调用点。
+      经 compose 的 `environment:` 透传 ⇒ 与 `TORZNAB_URLS` 同一套形状，不污染每个调用点。
       ★ 变量名 `QB_API_KEY` **优先**，`QBIT_API_KEY` 作兼容别名（两种写法都认）。
     ★ 没有 key 时返回 `{}` —— 行为与改动前**逐字相同**（白名单/password 模式不受影响）。
     """

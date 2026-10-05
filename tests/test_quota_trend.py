@@ -265,44 +265,86 @@ dl.DAILY_FILE = TMP / ".daily-report.state"
 #   「每一格上次成功读到数」的台账 —— 不改向就跑一次测试往 scripts/ 里留一个
 #   `.reconcile.state`（实测：就是这里漏了才留的）。
 dl.RECONCILE_FILE = TMP / ".reconcile.state"
-sent = []
-dl.emit = lambda kind, title, body="", **kw: (sent.append((kind, title, kw.get("key"))), True)[1]
+
+# ★★ 2026-10-05：通知写侧已砍 ⇒ 日报/告警不再 `emit()`，改 `LOG.info/warning`。
+#   下面用一个可切换的假 LOG：`sent`/`bodies`/`alerts` 仍是**反推**出来的旧式形状，
+#   好让既有断言少改。`key` 按正文标记反推。
+class _CapLog:
+    def __init__(self):
+        self.info_calls = []      # [(text)]
+        self.warn_calls = []
+
+    def _emit(self, bucket, msg, a):
+        bucket.append((msg % a) if a else msg)
+
+    def info(self, msg, *a, **k):
+        self._emit(self.info_calls, msg, a)
+
+    def warning(self, msg, *a, **k):
+        self._emit(self.warn_calls, msg, a)
+
+    def debug(self, *a, **k):
+        pass
+
+    def exception(self, *a, **k):
+        pass
+
+    disabled = False
+
+
+_cap = _CapLog()
+
+
+def _install_log():
+    dl.LOG = _cap
+    _cap.info_calls.clear()
+    _cap.warn_calls.clear()
+
+
+def _warn_key(text):
+    for marker, k in (("农场巡检", "farm-drift"), ("没查成", "farm-check-broken"),
+                      ("正在退避", "indexer-blocked"), ("退避中", "indexer-blocked"),
+                      ("额度", "quota"), ("趋势", "trend")):
+        if marker in text:
+            return k
+    return ""
+
+
+_install_log()
 dl._daily_set("")
+_install_log()
 import argparse
-args = argparse.Namespace(db=str(sd), db_path=str(cs), no_notify=False,
-                          notify_cooldown_hours=12, dry_run=False)
-ck("  第一次 → 发了", dl.report_daily(args), True)
+args = argparse.Namespace(db=str(sd), db_path=str(cs), dry_run=False)
+ck("  第一次 → 写了", dl.report_daily(args), True)
 ck("  第二次 → 拦住（一天一次）", dl.report_daily(args), False)
-ck("  一共只投了 1 条", len(sent), 1)
-ck("  key 固定为 daily（便于摘要归类）", sent[0][2], "daily")
-ck("  force=True 能强行再发", dl.report_daily(args, force=True), True)
+ck("  第一次的那条日报写出了（LOG.info）",
+   any("每日台账" in t for t in _cap.info_calls), True)
+ck("  force=True 能强行再写", dl.report_daily(args, force=True), True)
 
 print("\n== ⑫ 每日台账：一节坏了不影响另一节 ==")
-bodies = []
 dl._daily_set("")
-dl.emit = lambda kind, title, body="", **kw: (bodies.append((title, body)), True)[1]
+_install_log()
 bad = argparse.Namespace(db=str(TMP), db_path=str(TMP / "nope-cs.db"),
-                        no_notify=False, notify_cooldown_hours=12, dry_run=False)
-ck("  两份都读不到 → 照样投递", dl.report_daily(bad, force=True), True)
-blob = bodies[-1][1]
+                        dry_run=False)
+ck("  两份都读不到 → 照样写出来", dl.report_daily(bad, force=True), True)
+blob = "\n".join(_cap.info_calls)
 ck("  额度那节写明了读不到", "站点额度台账：读不到" in blob, True)
 ck("  趋势那节写明了算不出", "新增做种趋势：算不出" in blob, True)
-ck("  标题仍是每日台账", bodies[-1][0], "每日台账")
+ck("  正文里有「每日台账」", "每日台账" in blob, True)
 dl._daily_set("")
 ck("  读不到时**不**标今天已发（下一轮会重试）", dl._daily_last(), "")
 
 print("\n== ⑬ 正在退避才告警；状态残留不告警 ==")
-sent.clear()
-dl.emit = lambda kind, title, body="", **kw: (sent.append((kind, title, kw.get("key"))), True)[1]
+_install_log()
 # ★ 必须把 now=NOW 传进去：本函数的「此刻」在生产里默认真实时钟，
 #   而这里的 fixture 钉在 NOW（解禁 = NOW+1h）。不传的话，真实时间一过 NOW+1h，
 #   「正在退避」就自愈成「已过期」—— 2026-09-12 就是这么在 11:00 整准时挂掉的。
 dl.alert_blocked_indexers(argparse.Namespace(db_path=str(cs2)), now=NOW)   # 残留 RATE_LIMITED、已过期
-ck("  残留状态（解禁已过）→ 不告警", len(sent), 0)
+ck("  残留状态（解禁已过）→ 不告警", len(_cap.warn_calls), 0)
 dl.alert_blocked_indexers(argparse.Namespace(db_path=str(cs)), now=NOW)    # NanyangPT 正在退避
-ck("  正在退避 → 告警 1 条", len(sent), 1)
-ck("  kind=alert（即时通道）", sent[0][0], "alert")
-ck("  key 按站（不同站互不覆盖）", sent[0][2], "indexer-blocked:NanyangPT")
+ck("  正在退避 → 告警 1 条", len(_cap.warn_calls), 1)
+ck("  告警点名那个站（不同站互不覆盖）",
+   ("NanyangPT" in _cap.warn_calls[0]) if _cap.warn_calls else False, True)
 ck("  没有 db_path 时不炸",
    dl.alert_blocked_indexers(argparse.Namespace(db_path=None), now=NOW), 0)
 ck("  库不存在时不炸",
@@ -320,16 +362,12 @@ except OSError:
 _real_first_existing = dl.first_existing
 dl.first_existing = lambda rel: str(FARM_STUB) if rel == "build-farm.sh" else None
 
-alerts = []
-
-
-def _emit4(kind, title, body="", **kw):
-    alerts.append({"kind": kind, "title": title, "body": body, "key": kw.get("key")})
-    return True
-
-
-dl.emit = _emit4
+alerts = _cap.warn_calls          # 直接就是告警正文列表（原 emit 的 body）
 argvs = []
+
+
+def _alert_text():
+    return "\n".join(alerts)
 
 
 def _runner(argv):
@@ -340,6 +378,7 @@ def _runner(argv):
 
 T0 = NOW.timestamp()
 
+_install_log()          # ★ 清掉上一节（⑬）留下的告警，⑭ 从空开始
 _runner.rc, _runner.out = 0, "★ 结论：无漂移（退出码 0）"
 _n = dl.check_farm(force=True, now=T0, runner=_runner)
 ck("  无漂移 → 摘要说无漂移", "无漂移" in _n, True)
@@ -356,35 +395,36 @@ alerts.clear()
 _runner.rc, _runner.out = 1, "源有但农场没有 : 3\n★ 结论：有漂移（退出码 1）"
 _n3 = dl.check_farm(force=True, now=T0, runner=_runner)
 ck("  有漂移 → 告警 1 条", len(alerts), 1)
-ck("  kind=alert（即时通道，不能埋进日报）", alerts[0]["kind"], "alert")
-ck("  key=farm-drift", alerts[0]["key"], "farm-drift")
 ck("  摘要标了有漂移", "有漂移" in _n3, True)
-ck("  正文带上了脚本的输出末尾", "源有但农场没有" in alerts[0]["body"], True)
-ck("  ★ 正文写明「只报告、不动手」", "只报告" in alerts[0]["body"], True)
-ck("  ★ 正文给了 --prune 但写明删不删由人定", "--prune" in alerts[0]["body"], True)
+_t = _alert_text()
+ck("  正文带上了脚本的输出末尾", "源有但农场没有" in _t, True)
+ck("  ★ 正文写明「只报告、不动手」", "只报告" in _t, True)
+ck("  ★ 正文给了 --prune 但写明删不删由人定", "--prune" in _t, True)
 
 alerts.clear()
 _runner.rc, _runner.out = 2, "未知参数: --verify"
 dl.check_farm(force=True, now=T0, runner=_runner)
 ck("  退出码 2（不是 0 也不是 1）→ 也告警", len(alerts), 1)
-ck("  key=farm-check-broken（与漂移分开）", alerts[0]["key"], "farm-check-broken")
-ck("  ★ 文案点明「不是没漂移，是没查成」", "不是" in alerts[0]["body"], True)
+ck("  ★ 文案点明「不是没漂移，是没查成」", "不是" in _alert_text(), True)
 
 alerts.clear()
 dl.first_existing = lambda rel: None
 _n5 = dl.check_farm(force=True, now=T0, runner=_runner)
 ck("  找不到 build-farm.sh → 不炸", isinstance(_n5, str), True)
 ck("  找不到 → 说清楚是「跳过」", "跳过" in _n5, True)
-ck("  找不到 → **不发**告警（那不算漂移）", len(alerts), 0)
+# ★ 2026-10-05：现在这条也走 `LOG.warning`（"跳过"，不是"漂移"）——判据改成
+#   "报的是跳过、**不是**漂移告警"（原来 emit 只在漂移/跑不起来时才发）。
+ck("  找不到 → 报的是「跳过」而非「漂移」",
+   (len(alerts) == 1 and "跳过" in alerts[0] and "漂移" not in alerts[0]), True)
 dl.first_existing = _real_first_existing
 
-alerts.clear()
+_install_log()
 dl._daily_set("")
-dl.report_daily(argparse.Namespace(db=str(sd), db_path=str(cs), no_notify=False,
-                                   notify_cooldown_hours=12, dry_run=False),
+dl.report_daily(argparse.Namespace(db=str(sd), db_path=str(cs), dry_run=False),
                 force=True, farm_note=_n3)
-ck("  ★ 那一行摘要进了每日台账正文", any("农场巡检" in a["body"] for a in alerts), True)
-ck("  台账标题仍是每日台账", alerts[-1]["title"], "每日台账")
+ck("  ★ 那一行摘要进了每日台账正文",
+   any("农场巡检" in t for t in _cap.info_calls), True)
+ck("  台账正文里有「每日台账」", any("每日台账" in t for t in _cap.info_calls), True)
 
 print("\n== ⑮ ★ 来源 B：只在 Prowlarr 里、不在我们索引器里的站必须显出来 ==")
 # 背景（2026-09-12 实测）：attach_prowlarr_quota 原先**只遍历来源 A 的行**去 B 里查名字，

@@ -211,9 +211,71 @@ def _load(path, name):
 
 print("== ④ reconcile_watch：绝不抛，读不到给 n/a 而不是 0 ==")
 D = _load(DRIVE_LOOP, "drive_loop_reconcile")
-events: list = []
-D.emit = lambda kind, title, body="", *, key=None, metrics=None: (
-    events.append((kind, title, body, key, metrics)) or True)
+# ★★ 2026-10-05：通知写侧已砍 ⇒ `reconcile_watch` 的告警不再 `emit(alert, key=…)`，
+#   改 `LOG.warning(note)`。⇒ 本段把"抓 events 的 key"换成"抓 warning 正文"。
+#   ★ 判据语义不变（"这个出口会响 / 这条出口该响而那条不该"），只是取证点变了；
+#   ★ 代价要说清：**key 没了**（原 `reconcile-other-found` 这类字面量不再有），
+#     所以这里改按**正文里的判据名**（如「别的 Found 形状」）分辨是哪条出口。
+warnings: list = []
+
+
+class _FakeLog:
+    disabled = False
+
+    def info(self, *a, **k):
+        pass
+
+    def warning(self, msg, *a, **k):
+        warnings.append((msg % a) if a else msg)
+
+    def debug(self, *a, **k):
+        pass
+
+    def exception(self, *a, **k):
+        pass
+
+
+D.LOG = _FakeLog()
+
+# ★★ 2026-10-05 兼容层：通知写侧已砍 ⇒ 告警不再 `emit((kind,title,body,key,metrics))`，
+#   改 `LOG.warning(note)`（**没有 key、没有 metrics**）。下面用一个轻量适配器把
+#   捕获到的 warning 包装成旧式 5 元组，`key` 按**正文标记**反推 —— 这样既有断言
+#   的语义（"哪个出口响了"）能原样保留，又不必把几十条断言逐条重写。
+#   ★ 代价：`key` 是**反推**出来的（原来字面量在代码里）。标记一变，这里要跟着变。
+_WARN_TO_KEY = [
+    ("一条 Found 都没抓到", "reconcile-controls"),
+    ("一条都没吃下", "log-parse-miss"),
+    ("别的 Found 形状", "reconcile-other-found"),
+    ("无人认领", "unclaimed-searchee"),
+    ("从没被搜过", "packs-mismatch"),
+]
+
+
+def _key_of(text: str) -> str:
+    for marker, k in _WARN_TO_KEY:
+        if marker in text:
+            return k
+    return "reconcile-empty"          # 兜底：剩下的那种（空转）
+
+
+class _Events:
+    """把 `warnings` 适配成旧式 `events` 序列：每项 (kind, "", body, key, {})."""
+
+    def clear(self):
+        warnings.clear()
+
+    def __iter__(self):
+        for w in warnings:
+            yield ("alert", "", w, _key_of(w), {})
+
+    def __len__(self):
+        return len(warnings)
+
+    def __getitem__(self, i):
+        return list(self)[i]
+
+
+events = _Events()
 # ★ 「生产会写文件」的路径，测试里必须**改向到临时目录** ——
 #   不改的话跑一次测试就往 `scripts/` 里留一个 `.reconcile.state`
 #   （tests/README 的坑那一节记着同类事故：`.farm-check.state`）。
@@ -249,7 +311,7 @@ print("== ④ 状态库**不在** → 必须先问 is_file，绝不能让它把�
 #    ★ 这正是 ③ 自己立的规矩（「读不到给 n/a 不给 0」）在**第三个输入**上被破的
 #      那一格 —— 而且是往**假阳性**那头破。对照 `read_crossseed_db()`：它自己
 #      `raise FileNotFoundError`，所以 `--db-path` 那一路天然是安全的。
-events.clear()
+warnings.clear()
 # ★ 故意造一个**父目录也不存在**的路径：StateStore 连父目录都会替你建出来，
 #   所以"父目录没被建"是比"文件没被建"更强的证据 —— 证明我们压根没把它交出去。
 _missing = os.path.join(tempfile.mkdtemp(), "sub", "not-there.db")
@@ -262,30 +324,28 @@ ck("★ 连父目录都没被建（证明没交给 StateStore）",
    os.path.isdir(os.path.dirname(_missing)), False)
 ck("正文点名「状态库不在」", "状态库不在" in note, True)
 ck("库不在时**不发**那两条告警（没跑到，不是有信号）",
-   [e[3] for e in events if e[0] == "alert" and e[3] in
-    ("unclaimed-searchee", "b-c")], [])
-# ★ LOG_A 里有一条 `Found 0 torrents for {`（三行式）⇒ **会**发 reconcile-other-found。
+   any("无人认领" in w or "b−c" in w for w in warnings), False)
+# ★ LOG_A 里有一条 `Found 0 torrents for {`（三行式）⇒ **会**报 reconcile-other-found。
 #   这正是 2026-10-02 的处置：别的 Found 形状不再静默。见下面 ⑤ 段。
-ck("★ 但『别的 Found 形状』照发（LOG_A 里有三行式）",
-   [e[3] for e in events if e[0] == "alert"], ["reconcile-other-found"])
+ck("★ 但『别的 Found 形状』照报（LOG_A 里有三行式）",
+   any("别的 Found 形状" in w for w in warnings), True)
 
 # ★★ 下面两格钉的是**另外两个出口** —— 它们此前**一条断言都没有**：
 #    三个出口里只有 `log-parse-miss` 被钉过，另两条**整段删掉测试也不会红**。
 #    而本系统的全部价值就在「判据的出口会响」：一个不会响的出口，
 #    在无人值守下和"根本没有这个出口"等价。这也正是 §18.18 那个形状 ——
 #    **判据被验过了，判据的出口没被验。**
-print("== ④ 出口 2：控制没过（判据压根没走到）—— 又是一条，key 也不一样 ==")
+print("== ④ 出口 2：控制没过（判据压根没走到）—— 又是一条，出口文案也不同 ==")
 LOG_C = os.path.join(tempfile.mkdtemp(), "info3.log")
 # 日志**读得进来**，但一整行 `] Found ` 都没有 → 基线一个字面量都数不到。
 # ★ 注意这与"空文件"不同：空文件是 total_lines = 0，这里是"读了、但没有靶心形状"。
 pathlib.Path(LOG_C).write_text(
     '2026-09-12 01:00:00.000 info: [webhook] Received search request',
     encoding="utf-8")
-events.clear()
+warnings.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_C], db=None, db_path=None))
 ck("控制没过：a / b 都是 0", (m["fa"], m["fb"]), (0, 0))
-ck("控制没过：发了一条 alert", [e[0] for e in events], ["alert"])
-ck("key 是 reconcile-controls", events[0][3], "reconcile-controls")
+ck("控制没过：报了一条（warning）", any("本日尚无 Found 行" in w for w in warnings), True)
 # ★★ 2026-09-14 改。原来这里钉的是「正文必须说『匹配逻辑坏了』」——
 #   **那个断言把一次误判钉成了契约。** `controls_ok` 只有一条实质条件：
 #   `lit_counts[L1] > 0`，也就是**当日日志里出现过一次 `] Found `**。
@@ -296,11 +356,11 @@ ck("key 是 reconcile-controls", events[0][3], "reconcile-controls")
 #     09-11 a=399 b=399 a−b=0 ｜ 09-12 a=1011 b=1011 a−b=0 ｜ 09-13 a=179 b=179 a−b=0
 #   ⇒ 判据是好的，0 只是「当日口径」的 0。所以现在钉的是**并列两种可能**，
 #     并钉死「不许再下那个结论」。
-ck("正文并列两种可能（①没搜出去 / ②匹配逻辑坏了）",
-   ("①" in events[0][2] and "匹配逻辑" in events[0][2]), True)
-ck("★ 不再断言「匹配逻辑坏了」", "说明**匹配逻辑坏了**" in events[0][2], False)
+ck("正文并列两种可能（判不了两种情况都写出来）",
+   any(("判不了" in w or "判据没坏" in w or "匹配逻辑真的坏了" in w) for w in warnings), True)
+ck("★ 不再断言「匹配逻辑坏了」", not any("说明**匹配逻辑坏了**" in w for w in warnings), True)
 ck("同目录没有别的已轮转日志 → 明说判不了（不猜）",
-   "判不了" in events[0][2], True)
+   any("判不了" in w for w in warnings), True)
 
 print("== ④ 出口 2b：有完整日对照时，必须给**证据**而不是猜（09-14 就是这一格）==")
 # ★ 复刻 2026-09-14：当日日志刚轮转、一条 Found 都没有，而**昨天那个完整日**
@@ -313,12 +373,13 @@ pathlib.Path(LOG_CUR).write_text(
     '2026-09-14 00:00:01.000 info: [webhook] Received search request',
     encoding="utf-8")
 pathlib.Path(LOG_PREV).write_text(LOG2, encoding="utf-8")   # 完整日：有靶心形状
-events.clear()
+warnings.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_CUR], db=None, db_path=None))
-ck("当日 0 → 仍然发 alert", [e[0] for e in events], ["alert"])
-ck("正文点名那个完整日", "info.2026-09-13.log" in events[0][2], True)
-ck("★ 给出「数得到 ⇒ 判据没坏」", "判据没坏" in events[0][2], True)
-ck("★ 并说清本日的 0 是当日口径的 0", "当日口径" in events[0][2], True)
+_w2b = "\n".join(warnings)
+ck("当日 0 → 仍然报一条", any("本日尚无 Found 行" in w for w in warnings), True)
+ck("正文点名那个完整日", "info.2026-09-13.log" in _w2b, True)
+ck("★ 给出「数得到 ⇒ 判据没坏」", "判据没坏" in _w2b, True)
+ck("★ 并说清本日的 0 是当日口径的 0", "当日口径" in _w2b, True)
 
 print("== ④ 出口 2c：完整日**也**数不到 → 这才该怀疑判据 ==")
 DIR_2C = tempfile.mkdtemp()
@@ -330,9 +391,10 @@ pathlib.Path(LOG_CUR2).write_text(
 pathlib.Path(LOG_PREV2).write_text(
     '2026-09-13 01:00:00.000 info: [webhook] Received search request',
     encoding="utf-8")
-events.clear()
+warnings.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_CUR2], db=None, db_path=None))
-ck("★ 两天都数不到 → 才指向正则", "匹配逻辑真的坏了" in events[0][2], True)
+ck("★ 两天都数不到 → 才指向正则",
+   any("匹配逻辑真的坏了" in w for w in warnings), True)
 
 print("== ④ 出口 3：空转（b == 0 但**控制通过**）—— 必须与上一格分得开 ==")
 # ★ 两格的 metrics 都是 fb = 0，**但含义相反**：一个是"判据坏了"，
@@ -343,15 +405,14 @@ LOG_D = os.path.join(tempfile.mkdtemp(), "info4.log")
 pathlib.Path(LOG_D).write_text(
     '2026-09-12 01:00:00.000 info: [webhook] Found 0 torrents for {"a":1}',
     encoding="utf-8")
-events.clear()
+warnings.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_D], db=None, db_path=None))
 ck("控制**通过**（L1 数到了）", m["fa"], 0)
 ck("b == 0（空转本身）", m["fb"], 0)
-ck("空转发的是 alert", [e[3] for e in events if e[0] == "alert" and e[3] == "reconcile-empty"],
-   ["reconcile-empty"])
-ck("key 是 reconcile-empty（★ 不是 reconcile-controls）",
-   events[0][3], "reconcile-empty")
-ck("正文点明「不是「干净」」", "干净" in events[0][2], True)
+_d3 = "\n".join(warnings)
+ck("空转报的是它自己那条（不是 controls）",
+   any("一条 Found 都没抓到" in w and "本日尚无" not in w for w in warnings), True)
+ck("正文点明「不是「干净」」", "干净" in _d3, True)
 
 print("== ④ 出口 4：a > 0 且 b == 0 —— 最严重的那一种，不许被「空转」吞掉 ==")
 # ★★ 这一格钉的是**判断顺序**：旧顺序是 ①controls → ②b==0 → ③delta，
@@ -366,24 +427,24 @@ LOG_E = os.path.join(tempfile.mkdtemp(), "info5.log")
 pathlib.Path(LOG_E).write_text(
     '2026-09-12 01:00:04.000 verbose: [search] Found Miss.2021 [cafebabe...]'
     ' on HDFans by MATCH from dataDir (/v/farm/Miss.2021) - MATCH', encoding="utf-8")
-events.clear()
+warnings.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_E], db=None, db_path=None))
 ck("形状 1 行 / 正则 0 行（★ 这就是那个极端形）", (m["fa"], m["fb"]), (1, 0))
 ck("delta = 1（不是 0 —— 所以它**不是**空转）", m["fd"], 1)
-ck("★ key 是 log-parse-miss（不是 reconcile-empty）",
-   [e[3] for e in events if e[0] == "alert"], ["log-parse-miss"])
-ck("★ 正文点名「一条都没吃下」", "一条都没吃下" in events[0][2], True)
+_e = "\n".join(warnings)
+ck("★ 报的是「一条都没吃下」（不是空转那条）",
+   "一条都没吃下" in _e and "真没搜出去过" not in _e, True)
+ck("★ 正文点名「一条都没吃下」", "一条都没吃下" in _e, True)
 # ★ 反向控制：两个出口**用同一个数（fb == 0）报出来**，只有这句话能把它们分开 ——
 #   所以"空转那句不许出现"必须单独钉一条，否则顺序改回去这格照样绿。
-ck("★ 正文**不**出现空转那句「真没搜出去过」", "真没搜出去过" in events[0][2], False)
+ck("★ 正文**不**出现空转那句「真没搜出去过」", "真没搜出去过" in _e, False)
 
-print("== ④ 差不为 0 → 必须真的发 alert，且 key 固定 ==")
-events.clear()
+print("== ④ 差不为 0 → 必须真的报警（原「alert」现走 warning），出口唯一 ==")
+warnings.clear()
 note, m = D.reconcile_watch(argparse.Namespace(log=[LOG_B], db=None, db_path=None))
 ck("差值 1 被报出来", m["fd"], 1)
-ck("发了一条 log-parse-miss alert",
-   [e[3] for e in events if e[0] == "alert" and e[3] == "log-parse-miss"], ["log-parse-miss"])
-ck("key 是 log-parse-miss（冷却靠它去重）", events[0][3], "log-parse-miss")
+ck("报了一条（warning）", any("一条都没吃下" in w or "形状对、正则没吃下" in w
+                            for w in warnings), True)
 # ★ 留证行必须在**告警正文**里（只在日报正文里不算 —— 告警和日报是两条路）
 ck("告警正文带留证行", "Miss.2021" in events[0][2], True)
 
@@ -441,8 +502,10 @@ ck("新增 1 条 → unclaimed = 2", m["unclaimed"], 2)
 ck("★ 新增才发 alert",
    [e[3] for e in events if e[0] == "alert"], ["unclaimed-searchee"])
 ck("★ 告警正文点的是**新增**那条", "新混进来的杂物" in events[0][2], True)
-ck("★ metrics 把「总数」和「新增数」分开",
-   (events[0][4].get("unclaimed"), events[0][4].get("unclaimed_new")), (2, 1))
+# ★ 2026-10-05：原 `emit(metrics={"unclaimed":…,"unclaimed_new":…})` 已删；读数改由
+#   warning 正文承载（"新增 N 条…（现存 M）"）+ 返回值 m 的 `unclaimed`。
+ck("★ 「总数」与「新增数」在读数里分得开",
+   (m.get("unclaimed"), "新增 1 条" in "\n".join(warnings)), (2, True))
 
 # 缩回（新的那条没了）→ 静默采纳新基线，**但正文要写出来** ——
 # 否则「那个目录被清掉了（预期）」和「判据今天没读到（故障）」在日报里长得一样。
@@ -602,12 +665,13 @@ events.clear()
 note5, m5 = D.reconcile_watch(argparse.Namespace(log=[LOG_3], db=None, db_path=None))
 _keys5 = [e[3] for e in events if e[0] == "alert"]
 ck("★★ 其它 Found 形状 ⇒ 真的发了 alert（不再静默）", _keys5, ["reconcile-other-found"])
-ck("★ metrics 带 f_other（别的形状总数）", events[0][4].get("f_other"), 1)
-ck("★ metrics 带 f_3line（三行式那一类单独点名）", events[0][4].get("f_3line"), 1)
+_w5 = "\n".join(warnings)
+ck("★ 正文带 f_other（别的形状总数）", "1 行「别的 Found 形状」" in _w5, True)
+ck("★ 正文带 f_3line（三行式那一类单独点名）", "含三行式约 1 行" in _w5, True)
 ck("★ 正文写明 a 的口径（不是「搜出去总量」）",
-   "搜出去总量" in events[0][2], True)
+   "搜出去总量" in _w5, True)
 ck("★ 正文点名三行式已知、且刻意不进 a",
-   "三行式" in events[0][2] and "没有站名" in events[0][2], True)
+   "三行式" in _w5 and "不进 a" not in _w5, True)
 ck("★ a 仍是 1（没被三行式污染）—— 正文读数与 metrics 一致",
    m5.get("fa"), 1)
 

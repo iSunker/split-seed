@@ -110,9 +110,7 @@ class Lab:
         self.compose_qb = self.d / "compose_qb"
         self.compose_qb.mkdir()
         # ★ 不写 compose.yaml ⇒ 拉起必失败 ⇒ rc=1（② 段要的就是这个）
-        self.notify = self.d / "notify"
-        for s in ("spool", "archive"):
-            (self.notify / s).mkdir(parents=True)
+        # ★ 2026-10-05：通知写侧已砍 ⇒ 不再建 notify 树、不再传 `--notify`。
         self.fix = self.d / "fixture.json"
         self.fix.write_text(fixture, encoding="utf-8")
         self.calls = self.d / "calls.log"
@@ -138,8 +136,7 @@ class Lab:
     def run(self, *args, timeout=120) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["sh", str(self.loop), "--compose", str(self.compose),
-             "--compose-qb", str(self.compose_qb),
-             "--notify", str(self.notify), *args],
+             "--compose-qb", str(self.compose_qb), *args],
             env=self.env(), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout)
 
@@ -162,7 +159,7 @@ class Lab:
         return subprocess.run(
             ["sh", str(self.loop), "--compose", str(self.compose),
              "--compose-qb", str(self.compose_qb),
-             "--notify", str(self.notify), "--selftest-live", *args],
+             "--selftest-live", *args],
             env=e, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout)
 
@@ -214,7 +211,7 @@ try:
     # 把 docker 挖掉 ⇒ watch 脚本 rc=2（查不了）
     lab.docker.unlink()
     r = subprocess.run(
-        ["sh", str(lab.loop), "--compose", str(lab.compose), "--notify", str(lab.notify)],
+        ["sh", str(lab.loop), "--compose", str(lab.compose)],
         env={**lab.env(), "WATCH_LOOP_SELFTEST": "1", "WATCH_INTERVAL": "1"},
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
     rounds = len(re.findall(r"---- 第 (\d+) 轮   ", r.stdout))
@@ -287,7 +284,7 @@ print("\n── ⑤ ★ --interval 非法值 ⇒ 退回默认并**说出来**（
 lab = Lab(ALL_OK)
 try:
     r = subprocess.run(
-        ["sh", str(lab.loop), "--compose", str(lab.compose), "--notify", str(lab.notify),
+        ["sh", str(lab.loop), "--compose", str(lab.compose),
          "--selftest-live", "--interval", "abc", "--once"],
         env=lab.env(), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=60)
@@ -296,7 +293,7 @@ try:
     check("  ↳ 且仍能正常跑完（不因为参数错就崩）", r.returncode in (0, 1),
           "rc=%s" % r.returncode)
     r2 = subprocess.run(
-        ["sh", str(lab.loop), "--compose", str(lab.compose), "--notify", str(lab.notify),
+        ["sh", str(lab.loop), "--compose", str(lab.compose),
          "--selftest-live", "--interval", "0", "--once"],
         env=lab.env(), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=60)

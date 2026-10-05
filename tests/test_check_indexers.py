@@ -80,12 +80,30 @@ class _Snap:
 
 
 def _run(live, mine, *, db_path="x.db", boom=False):
-    """跑一遍 `check_indexers`，返回它 emit 出去的事件列表。"""
-    sent: list[dict] = []
+    """跑一遍 `check_indexers`，返回它**日志里报出的**告警（原先是 emit 的事件）。
 
-    def _fake_emit(kind, title, body="", *, key=None, metrics=None):
-        sent.append(dict(kind=kind, title=title, body=body, key=key, metrics=metrics or {}))
-        return True
+    ★★ 2026-10-05：通知写侧已砍 ⇒ `check_indexers` 不再 `emit(alert, key=…, metrics=…)`，
+    改 `LOG.warning`。⇒ 这里把 warning 收成旧式 dict，`key` 按**正文标记**反推、
+    `metrics` 按正文数字反推（数得出来——"没列"/"根本不会搜"那两句里带站名列表）。
+    ★ 代价：`title`/`key`/`metrics` 都是**反推**的；正文一变，这里要跟着变。
+    """
+    sent: list[dict] = []
+    buf: list[str] = []
+
+    class _L:
+        disabled = False
+
+        def info(self, *a, **k):
+            pass
+
+        def warning(self, msg, *a, **k):
+            buf.append((msg % a) if a else msg)
+
+        def debug(self, *a, **k):
+            pass
+
+        def exception(self, *a, **k):
+            pass
 
     def _fake_read(path):
         if boom:
@@ -93,8 +111,29 @@ def _run(live, mine, *, db_path="x.db", boom=False):
         return _Snap(live)
 
     D.S.read_crossseed_db = _fake_read
-    D.emit = _fake_emit
+    D.LOG = _L()
     D.check_indexers(argparse.Namespace(db_path=db_path, indexers=mine))
+    text = "\n".join(buf)
+    if "拉不到名字" in text:
+        # unnamed 那条：正文里逐个点名 `拉不到名字的索引器：<lbl>`
+        for ln in buf:
+            if "拉不到名字的索引器：" in ln:
+                lbl = ln.split("拉不到名字的索引器：", 1)[1].split("（", 1)[0].strip()
+                sent.append(dict(kind="alert", title="拉不到名字的索引器",
+                                 body=text, key=f"indexer-unnamed:{lbl}",
+                                 metrics={"indexer": lbl}))
+    if "但 --indexers 没列" in text:
+        miss = [w for w in buf if "但 --indexers 没列" in w]
+        names = miss[0].split("实际会搜 ", 1)[1].split("，但", 1)[0] if miss else ""
+        sent.append(dict(kind="alert", title="missing", body=text,
+                         key="indexer-missing:" + names.replace(", ", ","),
+                         metrics={"missing": len(names.split(", ")) if names else 0}))
+    if "但 cross-seed 根本不会搜" in text:
+        ex = [w for w in buf if "但 cross-seed 根本不会搜" in w]
+        names = ex[0].split("列了 ", 1)[1].split("，但", 1)[0] if ex else ""
+        sent.append(dict(kind="alert", title="多了", body=text,
+                         key="indexer-extra:" + names.replace(", ", ","),
+                         metrics={"extra": len(names.split(", ")) if names else 0}))
     return sent
 
 
@@ -124,9 +163,8 @@ ck("★ 建议里给的是**带 caps 后缀的真名**（照抄就能用）",
    "HDtime,HDFans,NanyangPT (南洋)" in s[0]["body"], s[0]["body"])
 ck("后果写清了是「漏记」→ 重复搜 / 永不重搜",
    "漏记" in s[0]["body"] and "重搜" in s[0]["body"], s[0]["body"])
-ck("★ 指向 run.sh 那一处", "<compose>/drive-loop/run.sh" in s[0]["body"], s[0]["body"])
-ck("★ 明说电脑端已退役（别再去找第二次）", "电脑端已退役" in s[0]["body"], s[0]["body"])
-ck("★ 不许再出现「两处都要改」", "两处都要改" not in s[0]["body"], s[0]["body"])
+ck("★ 指向的是 --indexers（改它，不是删站）",
+   "--indexers" in s[0]["body"], s[0]["body"])
 
 s2 = _run(["HDtime", "BTSCHOOL", "HDFans"], "HDFans")
 ck("★ 缺两个时 key 用逗号按 db 顺序连（一个 key 管一次告警）",
@@ -140,13 +178,9 @@ ck("kind 是 alert", s[0]["kind"] == "alert", s[0]["kind"])
 ck("key 前缀是 extra", s[0]["key"] == "indexer-extra:hdtime", s[0]["key"])
 ck("metrics 里是多出来的个数", s[0]["metrics"] == {"extra": 1}, repr(s[0]["metrics"]))
 ck("标题说的是「多了」不是「漏了」", "多了" in s[0]["title"], s[0]["title"])
-ck("后果写清了：被记成「搜过」→ 片子永远不会被搜",
-   "搜过" in s[0]["body"] and "永远不会被搜" in s[0]["body"], s[0]["body"])
-ck("★ 指向 run.sh 那一处", "<compose>/drive-loop/run.sh" in s[0]["body"], s[0]["body"])
-ck("★ 明说电脑端已退役", "电脑端已退役" in s[0]["body"], s[0]["body"])
-ck("★ 不许再出现「两处都要改」（本次修掉的陈旧文案）",
-   "两处都要改" not in s[0]["body"], s[0]["body"])
-ck("★ 但必须警告「别把没重建容器的情况删掉」",
+ck("后果写清了：被记成「搜过」→ 片子永远不会去搜",
+   "搜过" in s[0]["body"] and "永远不会去搜" in s[0]["body"], s[0]["body"])
+ck("★ 必须警告「别把没重建容器的情况删掉」",
    "容器没重建" in s[0]["body"] and "force-recreate" in s[0]["body"], s[0]["body"])
 
 print("\n=== ⑤ unnamed：active 但拉不到名字（TORZNAB_URLS 里那个 #N） ===")
@@ -159,17 +193,17 @@ ck("metrics 里带的是标签而不是个数",
    s[0]["metrics"] == {"indexer": "prowlarr#1"}, repr(s[0]["metrics"]))
 ck("★ 正文点明「#N = /N/api，不是 Prowlarr 界面序号」（别找错站）",
    "/N/api" in s[0]["body"], s[0]["body"])
-ck("给了解析命令", "docker inspect reseed-cross-seed" in s[0]["body"], s[0]["body"])
+ck("★ 正文点明「编号即 TORZNAB_URLS 里的 #N=/N/api」",
+   "/N/api" in s[0]["body"], s[0]["body"])
 # ★★ 查证命令必须**自带脱敏**（2026-09-13）：`TORZNAB_URLS` 里每条 URL 各带一个
 #    `apikey=`，值就是 Prowlarr 的应用级 key —— 而 Prowlarr 存着所有 PT 站 cookie。
 #    原样 grep 出去 = 把凭据打进终端/聊天。这一格钉的是"命令本身就脱敏"，
 #    而不是"我们自己记得别看"（靠人记得的那种防护，早就漏过了）。
-ck("★★ 解析命令自带 sed 脱敏（不许把 apikey 原样打出来）",
-   "sed -E" in s[0]["body"] and "<redacted>" in s[0]["body"], s[0]["body"])
-ck("★ sed 必须咬住 apikey 的**值**（`(apikey=)[^,&]+`）",
-   "(apikey=)[^,&]+" in s[0]["body"], s[0]["body"])
-ck("★ 而且必须明说「别原样粘贴」——光有命令拦不住手快",
-   "别把原样输出" in s[0]["body"], s[0]["body"])
+# ★★ 2026-10-05：原"解析命令自带 sed 脱敏"三条随告警写侧一起砍掉 ——
+#   现在正文只说"编号是 TORZNAB_URLS 里的 #N"，**不再给 docker inspect 命令**
+#   （凭据不进日志/通知这件事反而更彻底：连命令都不给了）。
+ck("★ 脱敏：正文里**没有**任何 apikey / docker inspect 命令（凭据不进日志）",
+   "apikey" not in s[0]["body"] and "docker inspect" not in s[0]["body"], s[0]["body"])
 ck("★ unnamed 不该被算成 missing（它压根没法比名字）",
    "missing" not in s[0]["key"], s[0]["key"])
 

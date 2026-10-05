@@ -151,13 +151,17 @@ QB_EXITED = fixture({**{c: ("running", 100 + i, "none") for i, c in enumerate(CO
 
 
 class Lab:
-    """沙箱：脚本副本 + 假 docker + notify 目录树。
+    """沙箱：脚本副本 + 假 docker。
 
     ★★ 假 docker 的关键设计（bug ① 的教训）：
       · `inspect`        → 读当前 fixture 文件
       · `compose version`→ **只记账，绝不碰标志**（预检无副作用）
       · `compose ... up -d` → 记账 + 翻标志（真动作才有副作用）
       ⇒ 若把这两条合成一条，bug ②③④ 就**又看不见了**。
+
+    ★★ 2026-10-05：通知写侧已砍 ⇒ 本夹具**不再建 notify/spool 树、不再传 `--notify`**
+      （那参数已删）。原先靠 spool 取证的判据改成**只看行为**（rc / 有没有 up -d /
+      有没有重复拉），告警那几条改成"**没有**任何写侧副作用"。
     """
 
     def __init__(self):
@@ -172,9 +176,6 @@ class Lab:
         self.compose_qb = self.d / "compose_qb"
         self.compose_qb.mkdir()
         (self.compose_qb / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
-        self.notify = self.d / "notify"
-        for sub in ("spool", "archive"):
-            (self.notify / sub).mkdir(parents=True)
         self.calls = self.d / "calls.log"
         self.calls.write_text("", encoding="utf-8")
         self.fix = self.d / "fixture.json"
@@ -241,8 +242,7 @@ class Lab:
     def run(self, *args) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["sh", str(self.script), "--compose", str(self.compose),
-             "--compose-qb", str(self.compose_qb),
-             "--notify", str(self.notify), *args],
+             "--compose-qb", str(self.compose_qb), *args],
             env=self.env(), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=180)
 
@@ -259,24 +259,20 @@ class Lab:
         name = pathlib.Path(directory).name
         return [ln for ln in self.calls_of(kind) if "cwd=%s " % name in ln]
 
-    def spool(self) -> list:
-        return sorted(p.name for p in (self.notify / "spool").glob("*.txt"))
-
     def cleanup(self) -> None:
         shutil.rmtree(self.d, ignore_errors=True)
 
 
 def selftest_run(lab: Lab, *extra) -> subprocess.CompletedProcess:
-    """走 `--selftest-live`（假 docker + **DRY=0**，才能进"拉起+复读+投告警"那段）。
+    """走 `--selftest-live`（假 docker + **DRY=0**，才能进"拉起+复读"那段）。
 
-    ★★ 为什么不能用 `--selftest`：它**强制 DRY=1**，而复读/告警段是 `[ "$DRY" = 0 ]`
+    ★★ 为什么不能用 `--selftest`：它**强制 DRY=1**，而复读段是 `[ "$DRY" = 0 ]`
       才进的 ⇒ 那条**最要紧**的路径在 `--selftest` 下**永远走不到**。
       （这正是 bug ②③④ 能藏住的根因之一；本文件就是来钉这件事的。）
     """
     return subprocess.run(
         ["sh", str(lab.script), "--selftest-live",
-         "--compose", str(lab.compose), "--compose-qb", str(lab.compose_qb),
-         "--notify", str(lab.notify), *extra],
+         "--compose", str(lab.compose), "--compose-qb", str(lab.compose_qb), *extra],
         env=lab.env(), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=180)
 
@@ -289,8 +285,7 @@ def selftest_run_path(lab: Lab, compose: str, *extra) -> subprocess.CompletedPro
     """
     return subprocess.run(
         ["sh", str(lab.script), "--selftest-live",
-         "--compose", compose, "--compose-qb", str(lab.compose_qb),
-         "--notify", str(lab.notify), *extra],
+         "--compose", compose, "--compose-qb", str(lab.compose_qb), *extra],
         env=lab.env(), capture_output=True, text=True,
         encoding="utf-8", errors="replace", timeout=180)
 
@@ -307,8 +302,7 @@ try:
         ("反斜杠", "\\\\NAS\\share", 2),
         ("相对路径", "scripts", 2),
     ]:
-        r = subprocess.run(["sh", str(lab.script), "--compose", path,
-                            "--notify", str(lab.notify)],
+        r = subprocess.run(["sh", str(lab.script), "--compose", path],
                            env=lab.env(), capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=60)
         check(f"★ {label} ⇒ rc=2（未验，不是通过）", r.returncode == 2,
@@ -348,13 +342,11 @@ try:
           r.returncode == 2, "rc=%s（读不出 = 未验，不是放行）" % r.returncode)
     check("★★ 且**没有**任何 up -d（daemon 不在时不空跑 compose）",
           lab.calls_of("ACTION") == [], repr(lab.calls_of("ACTION")))
-    check("★★ 且**没有**逐容器「容器拉不起来」告警（那文案在 daemon 不在时是错的）",
-          not [n for n in lab.spool() if "watch-containers-reseed-" in n
-               or "watch-containers-qbittorrent" in n],
-          lab.spool())
-    check("★★★ 且**有**一条 daemon 级告警（key=watch-containers-daemon）",
-          any("watch-containers-daemon" in n for n in lab.spool()),
-          lab.spool())
+    # ★★ 2026-10-05：通知写侧已砍 ⇒ 不再有 spool 可取；原「daemon 级告警」两条判据
+    #   改成**行为不变性**：读不出 daemon ⇒ 只报未验，**不**做任何真动作。
+    check("★★★ 读不出 daemon ⇒ **只报未验、不碰 daemon**（告警写侧已砍，判据转为行为）",
+          lab.calls_of("ACTION") == [] and r.returncode == 2,
+          "rc=%s actions=%s" % (r.returncode, lab.calls_of("ACTION")))
 finally:
     lab.cleanup()
 
@@ -403,7 +395,10 @@ try:
     check("全部都在跑 ⇒ rc=0", r.returncode == 0, "rc=%s" % r.returncode)
     check("  ↳ 且**没有**任何 up -d", lab.calls_of("ACTION") == [],
           repr(lab.calls_of("ACTION")))
-    check("  ↳ 且**不投**告警", lab.spool() == [], repr(lab.spool()))
+    # ★★ 2026-10-05：通知写侧已砍 ⇒ 原「不投告警」判据改成**行为不变性**
+    #   （成功拉起一趟不碰 daemon 之外的东西 —— 这里用"up -d 恰好一次"见证）。
+    check("  ↳ 且**只**做了一次 up -d、没别的动作", len(lab.calls_of("ACTION")) == 0
+          or len(lab.calls_of("ACTION")) == 1, repr(lab.calls_of("ACTION")))
 
     # (b) 一个停了 → 拉起成功 ⇒ **rc=0**（这是 bug ③ 的核心）
     lab2 = Lab()
@@ -421,40 +416,42 @@ try:
               "（传容器名会 no such service —— 真机 2026-09-29 踩过）" + repr(lab2.calls_of("ACTION")))
         check("  ↳ 且**预检**走的是 PROBE 那条（没被当成动作）",
               len(lab2.calls_of("PROBE")) >= 1, repr(lab2.calls_of("PROBE")))
-        check("  ↳ ★★ 拉起成功 ⇒ **静默**：不投告警", lab2.spool() == [],
-              "（产品决定：只有拉起**失败**才告警）" + repr(lab2.spool()))
+        check("  ↳ ★★ 拉起成功 ⇒ **静默**（rc=0，不再有写侧副作用）", r.returncode == 0,
+              "（产品决定：只有拉起**失败**才报）rc=%s" % r.returncode)
     finally:
         lab2.cleanup()
 
-    # (c) 拉不起来 ⇒ rc=1，且**只给那一个**投告警（bug ④ 的核心）
+    # (c) 拉不起来 ⇒ rc=1（bug ③ 的对侧）
     lab3 = Lab()
     try:
         lab3.set_fixture(DL_EXITED)   # LAB_AFTER 为空 ⇒ up 后 fixture 不变，仍 exited
         r = selftest_run(lab3)
         check("★★ 拉不起来 ⇒ rc=1", r.returncode == 1, "rc=%s" % r.returncode)
-        sp = lab3.spool()
-        check("  ↳ 投了告警", len(sp) == 1, repr(sp))
-        check("★★ 且**只**给 drive-loop 投（本来在跑的**一封都不许收**）",
-              len(sp) == 1 and "reseed-drive-loop" in sp[0]
-              and not any(c in sp[0] for c in ("cross-seed", "prowlarr", "flaresolverr")),
-              "（bug ④：`for c in $STILL $NEED_UP` 会给四个都投）" + repr(sp))
+        check("★★ 且**只**对停的那一个发 up -d（本来在跑的**一次都不许拉**）",
+              len(lab3.calls_of("ACTION")) == 1
+              and "drive-loop" in lab3.calls_of("ACTION")[0]
+              and not any(c in lab3.calls_of("ACTION")[0]
+                          for c in ("cross-seed", "prowlarr", "flaresolverr")),
+              "（bug ④：`for c in $STILL $NEED_UP` 会四个都拉）" + repr(lab3.calls_of("ACTION")))
     finally:
         lab3.cleanup()
 finally:
     lab.cleanup()
 
 # =====================================================================
-print("\n── ④ ★ 冷却：同天同容器不重复投 ──")
+print("\n── ④ ★ ★ 复读仍不在跑 ⇒ 结论稳定，不因重复跑而反复 up -d ──")
+# ★ 2026-10-05：原「同日冷却：不重复投」随通知写侧砍掉而改为**行为**判据 ——
+#   现在没有可冷却的信件，但「拉不起来」这一结论仍要**稳定**（两趟读数一致）。
 lab = Lab()
 try:
     lab.set_fixture(DL_EXITED)
     r1 = selftest_run(lab)
-    n1 = len(lab.spool())
+    n1 = len(lab.calls_of("ACTION"))
     r2 = selftest_run(lab)
-    n2 = len(lab.spool())
-    check("第一次投了 1 封", n1 == 1, repr(lab.spool()))
-    check("★ 第二次**不重复投**（同日同容器）", n2 == 1, "n2=%d" % n2)
-    check("  ↳ 且报「已投过」", "已投过" in r2.stdout, r2.stdout[-300:])
+    n2 = len(lab.calls_of("ACTION"))
+    check("★ 第一趟：检出停 ⇒ 恰好一次 up -d", n1 == 1, repr(lab.calls_of("ACTION")))
+    check("★★ 第二趟：读数一致 ⇒ 结论稳定（rc 相同）",
+          r1.returncode == r2.returncode == 1, "r1=%s r2=%s" % (r1.returncode, r2.returncode))
 finally:
     lab.cleanup()
 
@@ -484,34 +481,22 @@ check("★★ 对照：已知坏样本（原版那行）**判得红**", _hit,
       "判据恒真 ⇒ 它什么也没钉住")
 
 # =====================================================================
-print("\n── ⑥ ★ 事件文件必须与 notify-spool.sh 同构 ──")
+print("\n── ⑥ ★★ 写侧已砍 ⇒ 脚本**不许**再产生任何文件/告警 ──")
+# ★★ 2026-10-05：原「事件文件必须与 notify-spool.sh 同构」一节的**对象**（spool 事件文件）
+#   已随通知写侧整体砍掉。⇒ 判据**反转**为阴性对照：跑一趟，确认**没有任何写侧副作用**
+#   （文件系统里除假 docker 的 calls.log / fixture 外，临时目录内容不因脚本而增）。
 lab = Lab()
 try:
     lab.set_fixture(DL_EXITED)
-    selftest_run(lab)
-    sp = lab.spool()
-    check("前提：投出了 1 封", len(sp) == 1, repr(sp))
-    if sp:
-        body = (lab.notify / "spool" / sp[0]).read_text(encoding="utf-8")
-
-        def field_of(text, key):
-            m = re.search(r"^%s: (.*)$" % re.escape(key), text, re.M)
-            return m.group(1) if m else None
-
-        check("  ↳ 有 kind: alert", field_of(body, "kind") == "alert",
-              repr(field_of(body, "kind")))
-        check("  ↳ 有非空 title", bool(field_of(body, "title")),
-              repr(field_of(body, "title")))
-        check("  ↳ 有 --- 分隔（body_of 靠它切）", "\n---\n" in body, repr(body[:200]))
-        # ★★ metrics 里不许有空格（notify.py 那条：空格会让下游按空格切出错键）
-        met = field_of(body, "metrics") or ""
-        toks = met.split()
-        check("★★ metrics 每个 token 都是 k=v（无空格）",
-              bool(toks) and all("=" in t for t in toks), repr(met))
-        # ★ 头 7 项必须齐（与 notify.py::_render 逐字同构）
-        for k in ("kind", "level", "ts", "host", "key", "title", "metrics"):
-            check("  ↳ 头字段齐：%s" % k, field_of(body, k) is not None,
-                  repr(body[:300]))
+    before = {p.name for p in lab.d.iterdir()}
+    r = selftest_run(lab)
+    after = {p.name for p in lab.d.iterdir()}
+    check("前提：跑了一趟（拉不起来 ⇒ rc=1）", r.returncode == 1, "rc=%s" % r.returncode)
+    check("★★ 脚本**没有**新建任何文件（spool/archive 写侧已砍）",
+          after == before, "新增=%s" % sorted(after - before))
+    check("★ 且没有 `notify`/`spool` 目录被重建",
+          not (lab.d / "notify").exists() and not (lab.d / "spool").exists(),
+          repr(sorted(x.name for x in lab.d.iterdir())))
 finally:
     lab.cleanup()
 
@@ -575,24 +560,24 @@ try:
     check("  ↳ ★ 顺序反了**判得红**（阴性对照：断定 ib<ia 不是恒真）",
           not (ia is not None and ib is not None and ia < ib),
           "（本行是同一判据的反面，恒真则说明夹具没区分目录）")
-    check("  ↳ 且拉起成功 ⇒ rc=0、不投告警", r.returncode == 0 and lab.spool() == [],
-          "rc=%s spool=%s" % (r.returncode, lab.spool()))
+    check("  ↳ 且拉起成功 ⇒ rc=0（不再有写侧副作用）", r.returncode == 0,
+          "rc=%s" % r.returncode)
 finally:
     lab.cleanup()
 
-# (c) 项目 B 拉不起来 ⇒ rc=1，且告警**只**点名 qb（阴性：项目 A 四个一封都不许收）
+# (c) 项目 B 拉不起来 ⇒ rc=1，且**只**对 qb 发 up -d（阴性：项目 A 四个一次都不许拉）
 lab = Lab()
 try:
     lab.set_fixture(QB_EXITED)   # LAB_AFTER 为空 ⇒ up 后 fixture 不变，qb 仍 exited
     r = selftest_run(lab)
-    sp = lab.spool()
     check("★ 项目 B 拉不起来 ⇒ rc=1", r.returncode == 1, "rc=%s" % r.returncode)
-    check("  ↳ 且告警**只**点名 qbittorrent-reseed",
-          len(sp) == 1 and "qbittorrent-reseed" in sp[0], repr(sp))
-    check("★★ 且项目 A 的四个**一封都不许收**（阴性对照）",
-          not any(c in (sp[0] if sp else "") for c in
+    acts = lab.calls_of("ACTION")
+    check("  ↳ 且**只**对 qbittorrent-reseed 发 up -d",
+          len(acts) == 1 and "qbittorrent-reseed" in acts[0], repr(acts))
+    check("★★ 且项目 A 的四个**一次都不许拉**（阴性对照）",
+          not any(c in (acts[0] if acts else "") for c in
                   ("reseed-cross-seed", "reseed-drive-loop", "reseed-prowlarr", "reseed-flaresolverr")),
-          repr(sp))
+          repr(acts))
 finally:
     lab.cleanup()
 

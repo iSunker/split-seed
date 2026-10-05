@@ -62,12 +62,11 @@
 #       「有 `[resident]` = 容器版常驻；没有 = 宿主 `--once`」—— 这条不对称是
 #       **有意接受**的，写在这里以免下一个人以为漏改了。
 #
-# ★ 这里**不设** `NOTIFY_SPOOL` / `--notify-spool`
-# ------------------------------------------------
-#   `scripts/notify.py` 的默认值就是 `<compose>/notify/spool`，而 compose 服务
-#   把这个目录**整目录 1:1 挂进去**了 ⇒ 默认值**正好对**。
-#   另设一个环境变量 = 多一个"改了代码默认值但这边还是旧的"漂移点（同 `run.sh`
-#   里"刻意不写 --url"的理由）。
+# ★ 通知（写侧）已整体砍掉（2026-10-05）
+# ----------------------------------------
+#   原先这里有一段解释"为什么不设 `NOTIFY_SPOOL`"。现在 drive-loop 里**没有任何
+#   通知写侧**了（`emit`/spool 全删，见 drive-loop.py 文件头）⇒ 那一段连同
+#   `NOTIFY_SPOOL` 这个漂移点一起消失。要发信请去独立通知项目。
 #
 # ★ 与 `run.sh` **同样要守**的一条（原文抄来，别以为容器里就不适用）
 # ---------------------------------------------------------------
@@ -168,8 +167,8 @@ if ! grep -q 'PHASE_IDLE' "$SCRIPT" 2>/dev/null; then
   echo "[!!] $SCRIPT 里没有 PHASE_IDLE —— 这是 §26.5 之前的旧版代码。" >&2
   echo "     ★ 文件在、但**版本旧**：说明**镜像本身**是旧的（docker load 没做 / 拉错了 tag）。" >&2
   echo "     ⇒ 重建镜像并 docker load 到 NAS（见 scripts/drive-loop.Dockerfile 顶部两条纪律）。" >&2
-  echo "     判据（NAS，单行，★ 只比 notify.py）：" >&2
-  echo "       docker compose --profile drive-loop exec drive-loop md5sum /app/scripts/notify.py" >&2
+  echo "     判据（NAS，单行，回读镜像里那份 drive-loop.py 的 md5）：" >&2
+  echo "       docker compose --profile drive-loop exec drive-loop md5sum /app/scripts/drive-loop.py" >&2
   echo "       ★ 2026-10-05 起生产只读镜像那份（不再有挂载副本）⇒ 只需回读 /app。" >&2
   echo "[$(date '+%F %T')] [resident] exit=3 (stale image: $SCRIPT)" >> "$ATTEMPTS"
   exit 3

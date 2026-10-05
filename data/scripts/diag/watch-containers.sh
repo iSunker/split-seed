@@ -8,7 +8,7 @@
 #   · `info.current.log` 末行 = `[server] Server stopped`（干净停机，不是崩溃）
 #   · `drive-loop.log` 末行 = `等待 45.0 分钟后跑下一批` —— 该醒没醒
 #   · `.drive-loop.state` 的 `heartbeat_ts` 停在 27 小时前
-#   · `notify/log/` 里 **没有当天的 .tsv**（一批都没跑）
+#   · 当天日志里**一批都没跑**（无新批次行）
 #
 # ★★ 现有两套机制**都覆盖不到这一种**，本脚本专治它：
 #   · `restart: unless-stopped`（compose）—— **只对「容器退出」生效**，
@@ -46,8 +46,8 @@
 #
 # 用法（**在 NAS 上跑**：DSM → 控制面板 → 终端机和 SNMP，或 Container Manager「终端」）
 # --------------------------------------------------------------------------------
-#   sudo sh watch-containers.sh              # 真查；发现不在跑就拉起 + 投告警
-#   sudo sh watch-containers.sh --dry-run    # 只查只报，**不拉起、不写 spool**
+#   sudo sh watch-containers.sh              # 真查；发现不在跑就拉起
+#   sudo sh watch-containers.sh --dry-run    # 只查只报，**不拉起**
 #   sh watch-containers.sh --selftest        # 本机自测（用假 docker，**只走 dry-run**）
 #   sh watch-containers.sh --selftest-live   # 本机自测**真动作路径**（假 docker + DRY=0）
 #   sudo sh watch-containers.sh --compose <dir>
@@ -61,8 +61,9 @@
 #
 # ★★ 验证状态（2026-09-28，**别把本机验过当成已上线**）
 #   ✅ 本机验过（假 docker，`--selftest-live`）：四种退出码 0/0/1/2 各有正例；
-#      「读不出 / 空数组 / 有内容」三种读数长得不一样；冷却不重复投；事件文件被
-#      **NAS 上那份真的 `notify-spool.sh`**（UNC 直读 `field_of`）逐字段解析通过。
+#      「读不出 / 空数组 / 有内容」三种读数长得不一样。
+#      （★ 早期还验过"事件文件被 NAS 上那份真的 `notify-spool.sh` 逐字段解析通过"
+#       —— 通知写侧已于 2026-10-05 砍掉，那条验证随之作废。）
 #   ✅ 对着 **NAS 的 `compose.yaml`** 核过：本栈六个 `container_name` 里只盯
 #      `restart: unless-stopped` 的**四个**常驻服务（另两个为何不盯见下面 CONTAINERS 处）；
 #      ★ 2026-10-01 又加了**项目 B**的 `qbittorrent-reseed`（见 CONTAINERS_QB 处）。
@@ -71,37 +72,32 @@
 #         夹具是我按文档造的，可能与真 daemon 有出入；
 #      ② `--profile drive-loop` 能否真把 `reseed-drive-loop` 拉起来、拉起来后是否真
 #         变 healthy（夹具只是「换个文件」）；
-#      ③ spool 投进 NAS 后**真的会被排空并发信**（本机只证到"字段能解析"这一步）；
-#      ④ 计划任务下的 `$PATH` / `sudo` / 宿主时间（DSM 计划任务的 env 与交互 shell 不同）。
+#      ③ 计划任务下的 `$PATH` / `sudo` / 宿主时间（DSM 计划任务的 env 与交互 shell 不同）。
 #   ⇒ 纪律：先在 NAS 上 `--dry-run` 看读数对不对，再手跑一次真的，**最后**才挂计划任务。
 #
-# ★★ 告警时机（**产品决定，已拍板**）：**只有「拉起之后仍然不在跑」才投告警**。
-#   成功拉起 ⇒ **完全静默**（不发信、rc=0）。
-#   · 理由：一次偶发停机被自动救回来后，发信只是噪音，且会训练运维忽略这封信。
-#   · 代价（**认下来**）：容器「停过又起来了」这件事**事后收不到信** —— 只能从
-#     rc / 计划任务日志看出来。若要事后有感知，看每日摘要里那段心跳。
-#   · ★ 曾写错过：`for c in $STILL $NEED_UP` 会给**本来好好跑着**的容器也各发一封，
-#     且 `drive-loop` 重复出现 ⇒ 同趟跑五遍。判据就是本仓那条「读数一样、含义相反」。
+# ★★ 结论口径（**产品决定，已拍板**）：**只有「拉起之后仍然不在跑」才算失败**（rc=1）。
+#   成功拉起 ⇒ **完全静默**（rc=0）。
+#   · 理由：一次偶发停机被自动救回来后不必惊动人。
+#   · 代价（**认下来**）：容器「停过又起来了」这件事**事后无痕** —— 只能从
+#     rc / 计划任务日志看出来。
+#   · ★ 曾写错过：判据写成「曾经不在跑」会给**本来好好跑着**的容器也记一笔，
+#     且 `drive-loop` 重复出现 ⇒ 同趟数五遍。判据就是本仓那条「读数一样、含义相反」。
+#     ⇒ 正确判据是 `$STILL`（**复读之后仍然不在跑**的），不是 `$STILL $NEED_UP`。
 #
-# ★ 本脚本**会写两个地方**（不是只读件 —— 别与 chk58.sh 的只读契约混为一谈）：
-#     ① `docker compose ... up -d`（拉起容器）
-#     ② `$NOTIFY_ROOT/spool/` 下投一个告警事件文件（交给「排空 spool」任务发信）
-#   ★ 除此之外**不写任何文件**，也**不删/不改** spool 里已有的东西。
-#   ★ 冷却状态用**文件名**记（见下），不写新的状态文件 —— 少一个要挂载的路径。
+# ★★ 本脚本的**唯一动作 = 拉起容器**（通知写侧已于 2026-10-05 整体砍掉）：
+#     ① `docker compose ... up -d`（拉起容器）—— 唯一写的"地方"。
+#   ★ 除此之外**不写任何文件**（早先那段"投告警进 spool"已删除，见本仓 commit）。
+#   ★ 退出码与上屏结论**照旧**：拉不起来的容器仍会 `bad`/rc=1 —— 只是不再发信。
+#     要发信请去独立通知项目（`D:\Projects\nas里pt相关程序邮件通知告警项目`）。
 
 set -u
 
 export PYTHONIOENCODING=utf-8
 
 COMPOSE_DIR="${COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
-NOTIFY_ROOT="${NOTIFY_ROOT:-$COMPOSE_DIR/notify}"
-# ★★ 2026-10-04：`NOTIFY=0` ⇒ **不往 spool 投任何告警**（拉起动作照做）。
-#   起因：通知模块整体剥离（见本仓 `重构方案.md` §11）。**默认仍为 1** —— 保留写事件
-#   的能力，这样 NAS 上只要还留着 `notify-spool.sh`，巡检告警就还发得出去；
-#   等新通知项目接管后再在 compose 里把 `NOTIFY=0` 显式设上。
-#   ★ 判据：`NOTIFY` 只管「发不发」，**不管「拉不拉」** —— 两者必须能分开取证，
-#     否则"关告警"会连带把"自动拉起"也关掉（含义相反）。
-NOTIFY="${NOTIFY:-1}"
+# ★ 通知（NOTIFY / NOTIFY_ROOT）已于 2026-10-05 整体砍掉：本脚本不再写 spool，
+#   `NOTIFY`（投不投告警）这个变量随之消失 —— 它只管"投不投"，与"拉不拉"无关，
+#   现在既没有投信也没有可关的开关。`--notify` / `--no-notify` 两个参数也已删。
 DRY=0
 SELFTEST=0
 # ★ 自测用的假 docker（见 --selftest）。生产上必须是空串。
@@ -139,27 +135,23 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run)  DRY=1 ;;
         --selftest) SELFTEST=1; DRY=1 ;;
-        # ★★ `--selftest-live`：用假 docker，但**允许 DRY=0** —— 否则「拉起 + 复读 +
-        #   投告警」这条**最要紧**的路径根本无法自测（`--selftest` 强制 DRY=1，
+        # ★★ `--selftest-live`：用假 docker，但**允许 DRY=0** —— 否则「拉起 + 复读」
+        #   这条**最要紧**的路径根本无法自测（`--selftest` 强制 DRY=1，
         #   而复读那段是 `[ "$DRY" = 0 ]` 才进的 ⇒ 永远走不到）。
-        #   本机自测实测踩过：改了告警段的范围（`$STILL` 而非 `$STILL $NEED_UP`），
+        #   本机自测实测踩过：改了 `$STILL` 的范围（`$STILL` 而非 `$STILL $NEED_UP`），
         #   却因为跑不出这条路径而**看不出对错** —— 正是本仓反复钉的「没验 = 不算过」。
         #   ★ 生产上**绝不能用**（它会真去 up -d）；只给本机自测用。
         --selftest-live) SELFTEST=1 ;;
         --compose)  shift; COMPOSE_DIR="${1:-}" ;;
         --compose-qb) shift; COMPOSE_DIR_QB="${1:-}" ;;
-        --notify)   shift; NOTIFY_ROOT="${1:-}" ;;
-        # ★ 关掉告警投递（拉起照做）。剥离通知模块后可用 `NOTIFY=0` 或本开关。
-        --no-notify) NOTIFY=0 ;;
         # ★ 半角括号 + ASCII 标点，理由见文件头（dash 取词器会在全角括号上截断）。
-        *) echo "未知参数: $1   (可用: --dry-run | --selftest | --selftest-live | --compose <dir> | --compose-qb <dir> | --notify <dir> | --no-notify)" >&2; exit 2 ;;
+        *) echo "未知参数: $1   (可用: --dry-run | --selftest | --selftest-live | --compose <dir> | --compose-qb <dir>)" >&2; exit 2 ;;
     esac
     shift
 done
 
 COMPOSE_DIR=$(printf '%s' "$COMPOSE_DIR" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
 COMPOSE_DIR_QB=$(printf '%s' "$COMPOSE_DIR_QB" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
-NOTIFY_ROOT=$(printf '%s' "$NOTIFY_ROOT" | tr -d '\r\n' | sed 's/[[:space:]]*$//')
 
 # ★★ 机器守卫：本脚本要在 **NAS 上**跑。在开发机（Windows + Docker Desktop）上跑，
 #    `docker inspect` 查的是**本机**的 daemon —— 那是一台与 NAS **毫无关系**的机器，
@@ -412,8 +404,7 @@ fi
 echo "=== watch-containers.sh   $(date '+%Y-%m-%d %H:%M:%S')   dry_run=$DRY ==="
 echo "    COMPOSE_DIR=$COMPOSE_DIR"
 echo "    COMPOSE_DIR_QB=$COMPOSE_DIR_QB"
-echo "    NOTIFY_ROOT=$NOTIFY_ROOT"
-echo "    NOTIFY=$NOTIFY   (0=不投告警，只上屏；拉起动作不受影响)"
+# ★ 通知（NOTIFY / NOTIFY_ROOT）已于 2026-10-05 砍掉 ⇒ 这里不再打印它们。
 # ★ daemon 身份也打出来 —— 事后翻日志时能一眼看出"这次问的是哪台机器"。
 #   （没它就是 §32.8 那个洞：读数是「四个都没起」，而真因是「问错了机器」。）
 if [ -n "$DAEMON_ID" ]; then
@@ -596,66 +587,14 @@ $INSPECT_OUT
 EOF
 echo
 
-# ★★★ 2026-10-03（`§32.17`）：daemon 不可用 ⇒ **另投一条 daemon 级告警**，
-#   然后**跳过**整段"拉起"（`N_BAD` 是 0，所以本来也不会拉起，但要说清楚）。
-#   ★ 为什么不复用逐容器那条告警：那条的正文写死「已尝试拉起 / 复读仍不在跑」，
-#     而 daemon 不在时**什么都没尝试** ⇒ 复用就是**撒谎**（本仓最忌的"读数一样、含义相反"）。
-#   ★ 判据：这条告警的 key 与逐容器那条**不同**（`watch-containers-daemon`），
-#     标题也明说是 **daemon** 不在，不点名任何单个容器。
+# ★★★ 2026-10-03（`§32.17`）：daemon 不可用 ⇒ 本趟**不拉起任何容器**（`N_BAD` 是 0，
+#   本来也不会拉起，但要说清楚），并且把这条结论**打屏 + 置 rc=2（未验）**。
+#   ★ 通知写侧已砍掉（2026-10-05）：原先这里还会投一条 daemon 级告警进 spool —— 已删。
 if [ "$DAEMON_DOWN" = 1 ]; then
     say "★★★ docker daemon **不可用**（\`docker info\` 失败 ⇒ 身份读不出）——"
     say "    这一刻**所有**容器都读不到，**不是**「容器被删」、也**不是**「拉起失败」。"
-    say "    ⇒ 本趟**不拉起、不投逐容器告警**（那些结论在 daemon 不在时不成立）。"
+    say "    ⇒ 本趟**不拉起**（结论在 daemon 不在时不成立），退出码 2（未验）。"
     UNK=$((UNK + 1))
-    SPOOL="$NOTIFY_ROOT/spool"; ARCHIVE="$NOTIFY_ROOT/archive"
-    if [ "$NOTIFY" = 0 ]; then
-        # ★ 通知已剥离/显式关闭：不投告警，但这一趟"未验"的**结论照样打屏**
-        #   （退出码仍是 2）—— 关的是信，不是判断。
-        say "  （NOTIFY=0：daemon 告警**不投递**，只上屏；结论仍为『未验』rc=2）"
-    elif [ ! -d "$SPOOL" ]; then
-        na "spool 目录不存在（$SPOOL）—— daemon 告警**投不出去**"
-    else
-        _day=$(date '+%Y-%m-%d')
-        _tag="watch-containers-daemon-${_day}"
-        _already=0
-        if find "$SPOOL" "$ARCHIVE" -maxdepth 1 -name "*${_tag}*" 2>/dev/null | grep -q .; then
-            _already=1
-        fi
-        if [ "$_already" = 1 ]; then
-            say "  （daemon 今天已投过告警，不重复投）"
-        else
-            _ms=$(date '+%s')000
-            _f="$SPOOL/${_ms}-$$-${_tag}.txt"
-            _tmp="${_f}.tmp"
-            {
-                printf '# reseed-notify v1\n'
-                printf 'kind: alert\n'
-                printf 'level: alert\n'
-                printf 'ts: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-                printf 'host: %s\n' "$(hostname 2>/dev/null || echo unknown)"
-                printf 'key: watch-containers:daemon\n'
-                printf 'title: docker daemon 不可用（不是容器拉不起来）\n'
-                # ★ metrics 里**不许有空格**（键和值都不许）—— 见 notify.py 那段。
-                printf 'metrics: scope=daemon reason=info-unreadable attempted=0\n'
-                printf -- '---\n'
-                printf '本趟 `docker info` 读不出 ⇒ **docker daemon 不可用**（或没权限）。\n'
-                printf '★ 这一刻**所有**容器都读不到 —— 这**不是**「某个容器拉不起来」。\n'
-                printf '★★ 常见的真因：**ContainerManager / dockerd 正在重启**（如 2026-10-03 00:13:54 那次），\n'
-                printf '   NAS 本身**没**重启时也会这样。等 daemon 起来后，下一趟会自己恢复。\n'
-                printf '★ 排查：\n'
-                printf '  sudo docker info          （能不能连上 daemon）\n'
-                printf '  ps -o lstart -C dockerd   （dockerd 是不是刚重启）\n'
-                printf '  uptime                    （区分「daemon 重启」与「NAS 重启」）\n'
-                printf '主机: %s\n' "$(hostname 2>/dev/null || echo unknown)"
-            } > "$_tmp" 2>/dev/null
-            if [ -s "$_tmp" ] && mv -f "$_tmp" "$_f" 2>/dev/null; then
-                ok "已投 daemon 告警（$(basename "$_f")）"
-            else
-                warn "投 daemon 告警失败（写 $SPOOL 出错？）"
-                rm -f "$_tmp" 2>/dev/null || true
-            fi
-        fi
-    fi
     echo
 fi
 
@@ -692,7 +631,6 @@ else
         if [ -n "$NEED_UP_SVC" ]; then
             say "  cd \"$COMPOSE_DIR\" && $DOCKER $COMPOSE_CMD --profile $COMPOSE_PROFILE up -d$NEED_UP_SVC"
         fi
-        say "[dry-run] 会投一条告警进 $NOTIFY_ROOT/spool/"
     elif [ -z "$COMPOSE_CMD" ]; then
         bad "找不到 compose 命令（docker compose / docker-compose 都没有）⇒ 拉不起来"
         say "  手工核对： $DOCKER ps -a   然后在 $COMPOSE_DIR 里 up -d"
@@ -796,82 +734,12 @@ EOF
     echo
 
     # ------------------------------------------------------------------ #
-    # 投告警进 spool（复用现有发信链路 —— **不新造通道**）
-    # ------------------------------------------------------------------ #
-    # 事件文件格式必须与 `notify.py::Notifier._render` **逐字同构**，
-    # 否则「排空 spool」那侧读不出来（它只读 `kind:` 与 `title:`，但整套头要齐）。
-    #
-    # ★★ 防轰炸：**同一天同一容器只投一次**。
-    #   动机同 2026-09-13 那场邮件风暴 —— 本任务每 5 分钟跑一趟，若不冷却，
-    #   一个拉不起来的容器会**一天 288 封**。冷却用**文件名**记（扫 spool + archive），
-    #   不写新的状态文件 ⇒ 少一个要挂载的路径。
-    SPOOL="$NOTIFY_ROOT/spool"
-    ARCHIVE="$NOTIFY_ROOT/archive"
-    if [ "$NOTIFY" = 0 ]; then
-        # ★ 通知已剥离/显式关闭：逐容器告警**不投递**（拉起动作在上面已做完）。
-        #   ★ 结论照样上屏（`$STILL` 已在上面 `bad` 打过），关的只是这封信。
-        say "  （NOTIFY=0：逐容器告警**不投递**，只上屏；拉起动作不受影响）"
-    elif [ ! -d "$SPOOL" ]; then
-        na "spool 目录不存在（$SPOOL）—— 告警**投不出去**（但拉起已做完）"
-    else
-        _day=$(date '+%Y-%m-%d')
-        # ★★ 只对 `$STILL`（**复读之后仍然不在跑**的）投告警 —— 不是 `$STILL $NEED_UP`。
-        #   动机（本机自测实测）：`$NEED_UP` 是「**曾经**不在跑」的集合，**不是**
-        #   「还没修好」的集合。写 `for c in $STILL $NEED_UP` 的后果：
-        #     ① 三个**本来好好的**容器也各收一封「容器不在跑」—— 假警报，正是本仓
-        #        反复钉的「读数一样、含义相反」；运维收到后就不再信这封信了；
-        #     ② `drive-loop` 出现在两个变量里 ⇒ 循环**跑五遍**（四个容器），
-        #        冷却判定在同一次循环里还没落盘，于是**同一次运行里重复投**。
-        #   ⇒ `$STILL` 已经涵盖了「拉起失败」这个唯一该报的情形。
-        for c in $STILL; do
-            # 该容器当天是否已经投过？（冷却标记是**文件名里的一段**，不是文件内容）
-            _tag="watch-containers-${c}-${_day}"
-            _already=0
-            # ★ 只看文件名，不 cat —— 在满盘/慢盘上读内容既慢又可能失败。
-            #   `find` 加 `--` 不需要；路径都已引号包裹。
-            if find "$SPOOL" "$ARCHIVE" -maxdepth 1 -name "*${_tag}*" 2>/dev/null | grep -q .; then
-                _already=1
-            fi
-            if [ "$_already" = 1 ]; then
-                say "  （$c 今天已投过告警，不重复投）"
-                continue
-            fi
-
-            # ★ 变量名带 `_` 前缀避免与 POSIX 保留名冲突；文件名用毫秒时间戳前缀，
-            #   与 notify.py 的 `%d-%d-%s.txt` 同形状 ⇒ 排空侧按名字排序仍是 FIFO。
-            _ms=$(date '+%s')000
-            _f="$SPOOL/${_ms}-$$-${_tag}.txt"
-            _tmp="${_f}.tmp"
-            {
-                printf '# reseed-notify v1\n'
-                printf 'kind: alert\n'
-                printf 'level: alert\n'
-                printf 'ts: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-                printf 'host: %s\n' "$(hostname 2>/dev/null || echo unknown)"
-                printf 'key: watch-containers:%s\n' "$c"
-                printf 'title: 容器拉不起来：%s\n' "$c"
-                # ★ metrics 里**不许有空格**（键和值都不许）—— 见 notify.py 那段
-                #   「空格会让下游按空格切出错键」的注释。这里的值天然无空格。
-                printf 'metrics: container=%s action=restart attempted=1 failed=1\n' "$c"
-                printf -- '---\n'
-                # ★ 措辞须与「投告警时机」一致（见文件头）：这封信只在**拉起也没救回来**时发，
-                #   不是「容器停过」就发。否则读信的人会以为「收到信 = 刚才停过」。
-                printf '%s 不在跑，watch-containers.sh 已尝试拉起，**但复读仍不在跑**。\n' "$c"
-                printf '★ 这封信只在「拉起没成功」时发 —— 手动去 NAS 上查：\n'
-                printf '  docker ps -a        （看它的 status / ExitCode）\n'
-                printf '  docker logs %s      （看它为什么起不来）\n' "$c"
-                printf '主机: %s\n' "$(hostname 2>/dev/null || echo unknown)"
-            } > "$_tmp" 2>/dev/null
-
-            # ★★ 原子落盘：先写 .tmp 再 rename。排空任务**可能同时**在扫 spool，
-            #   半个文件会让 `field_of` 读出空 title（与 notify.py 同一处置）。
-            if [ -s "$_tmp" ] && mv -f "$_tmp" "$_f" 2>/dev/null; then
-                ok "已投告警：$c（$(basename "$_f")）"
-            else
-                warn "投告警失败（写 $SPOOL 出错？）—— 拉起已做完，只是这封信没发"
-                rm -f "$_tmp" 2>/dev/null || true
-            fi
-        done
+    # ★ 通知写侧已砍掉（2026-10-05）：原先这里把「拉起也没救回来」的容器**投告警进
+    #   `$NOTIFY_ROOT/spool/`**。整段（含事件文件渲染、同日冷却、原子落盘）已删除。
+    #   结论**照旧上屏**（上面 `$STILL` 已 `bad` 打过）+ rc=1 —— 只是不再发信。
+    #   要发信请去独立通知项目。
+    if [ -n "$STILL" ]; then
+        say "  ★ 以下容器**拉起也没救回来**（本脚本不再发信，请手动查）：$STILL"
     fi
     echo
 fi

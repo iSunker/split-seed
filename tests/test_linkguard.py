@@ -308,9 +308,24 @@ D.LINKGUARD_FILE = pathlib.Path(_td2) / ".linkguard.state"
 _sent: dict = {}
 
 
-def _fake_emit(kind, title, body="", *, key=None, metrics=None):
-    _sent.update(kind=kind, title=title, body=body, metrics=metrics or {})
-    return True
+class _FakeLog:
+    """★ 2026-10-05：通知写侧已砍 ⇒ `report_daily` 不再 `emit()`，改 `LOG.info(正文)`；
+    这里捕获日志正文（原来接 `emit` 的 body）。判据语义不变。"""
+    disabled = False
+
+    def info(self, msg, *a, **k):
+        text = (msg % a) if a else msg
+        if "每日台账" in text:
+            _sent["body"] = text
+
+    def warning(self, *a, **k):
+        pass
+
+    def debug(self, *a, **k):
+        pass
+
+    def exception(self, *a, **k):
+        pass
 
 
 class _Trend:
@@ -335,14 +350,13 @@ class _Store:
 D.S.StateStore = _Store
 D.S.qbit_all_torrents = lambda u, **kw: []
 D.S.qbit_tagged = lambda u, tag, **kw: TOR
-D.emit = _fake_emit
+D.LOG = _FakeLog()
 D.report_daily(argparse.Namespace(db_path=None, db="x.db", qbit_url="http://h:3060"),
                force=True)
 
 ck("正文里有这一节", "链接守护" in _sent["body"], _sent["body"][-300:])
-ck("★ lg_* 进了 metrics（TSV 唯一的入口）", "lg_files" in _sent["metrics"],
-   repr(_sent["metrics"]))
-ck("  kind 仍是 batch（只记账、不告警）", _sent["kind"] == "batch", _sent["kind"])
+ck("★ lg_* 读数在日报里（原 TSV 那条路已随通知写侧砍掉）",
+   "lg_files" in _sent["body"], _sent["body"][:400])
 ck("★★ 链接守护**没有**污染 .reconcile.state（它用自己的文件）",
    not D.RECONCILE_FILE.exists() or
    D.LINKGUARD_SNAP_KEY not in json.loads(D.RECONCILE_FILE.read_text(encoding="utf-8")),

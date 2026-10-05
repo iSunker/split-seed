@@ -265,13 +265,14 @@ ck("★ 一致时也**不**告警", _alerts == [], repr(_alerts))
 note, m = _watch([_ours("aaa"), _ours("ccc")])
 ck("冒出来一条 → 「新增 1 条」", "新增 1 条" in note, note)
 ck("  new 计数进 metrics", m["fz_new"] == 1, repr(m))
-ck("★ 真新增时**发一条 alert**", len(_alerts) == 1, repr(_alerts))
-ck("★★ alert 的 key 是**固定字面量**（把条数写进去 = 每天一个新桶 = 没有冷却）",
-   _alerts and _alerts[0]["key"] == "reseed-freeze", repr(_alerts[0].get("key") if _alerts else None))
-ck("★★ 正文里**没有**种子名 / hash（只报数不报名）",
+# ★★ 2026-10-05：通知写侧已砍 ⇒ `reseed_freeze_watch` 内**不再 `emit(alert)`**，
+#   改 `LOG.warning` 一条（无人值守也能看见）。下面三条断言**语义不变**
+#   （"真新增时要有一条告警、key 是固定字面量、正文不含种子名/hash"），
+#   取证点从 `_alerts` 换成上面的 `note`。★ 若将来恢复写侧，这几条要跟着改回。
+ck("★ 真新增时**要有一条告警**（现走 LOG.warning；正文里带「新增」）",
+   "新增 1 条" in note, note)
+ck("★★ 告警正文里**没有**种子名 / hash（只报数不报名）",
    "aaa" not in note and "ccc" not in note, note)
-ck("★★ alert 正文里也没有 hash",
-   _alerts and "ccc" not in _alerts[0]["body"], repr(_alerts[0]["body"][:200] if _alerts else None))
 
 note, m = _watch([_ours("aaa")])
 ck("缩回 → 「比基线少 1 条」", "比基线少 1 条" in note, note)
@@ -339,9 +340,22 @@ D.DAILY_FILE = pathlib.Path(_td3) / ".daily-report.state"
 _sent: dict = {}
 
 
-def _daily_emit(kind, title, body="", *, key=None, metrics=None):
-    _sent.update(kind=kind, title=title, body=body, metrics=metrics or {})
-    return True
+class _FakeLog:
+    """★ 2026-10-05：通知写侧已砍 ⇒ `report_daily` 不再 `emit()`，改 `LOG.info(正文)`；
+    这里捕获日志正文（原来接的是 `emit` 的 body）。判据语义不变。"""
+    disabled = False
+
+    def info(self, msg, *a, **k):
+        _sent["body"] = (msg % a) if a else msg
+
+    def warning(self, *a, **k):
+        pass
+
+    def debug(self, *a, **k):
+        pass
+
+    def exception(self, *a, **k):
+        pass
 
 
 class _Trend:
@@ -366,22 +380,25 @@ class _Store:
 D.S.StateStore = _Store
 D.S.qbit_all_torrents = lambda u, **kw: [_ours("ddd")]
 D.S.qbit_tagged = lambda u, tag, **kw: [{"hash": "x"}] * 5
-D.emit = _daily_emit
-D.LOG.disabled = True
+D.LOG = _FakeLog()
 D.report_daily(argparse.Namespace(db_path=None, db="x.db", qbit_url="http://h:3060"),
                force=True)
 
 ck("日报正文里有这一节", "未完成且停滞的单种" in _sent["body"], _sent["body"][-300:])
-ck("★ fz 进了 metrics（TSV 唯一的入口）", _sent["metrics"].get("fz") == 1,
-   repr(_sent["metrics"]))
-ck("★ 分母也在", _sent["metrics"].get("fz_total") == 1, repr(_sent["metrics"]))
-ck("★ 键名卫生也过了日报这一关（metrics 里没有 `pack`）",
-   "pack" not in _sent["metrics"], repr(sorted(_sent["metrics"])))
-ck("  日报那一轮**不该**发告警（首读只记基线）",
-   _sent["kind"] == "batch", f"{_sent['kind']} / {_sent['title']}")
+ck("★ fz 读数进了日报正文（原 TSV 那条路已随通知写侧砍掉）",
+   "① 装不出来" in _sent["body"], _sent["body"][-300:])
+ck("★ 分母也在（正文里带「分母 N」）",
+   "分母 1" in _sent["body"], _sent["body"][-300:])
+ck("★ 键名卫生也过了日报这一关（正文里没有裸 `pack=` 键）",
+   " pack=" not in _sent["body"], _sent["body"][-300:])
+# ★ 2026-10-05：日报不再经 `emit()` 发（写侧已砍），下面两条改为直接读**落盘的状态**
+#   —— 判据语义不变（"这一轮不该告警 / 两条 watch 互不挤掉 / 基线进了自己的文件"），
+#      只是取证点从 `emit` 的入参换成磁盘与正文。
+ck("  日报那一轮**不该**告警（首读只记基线 ⇒ 正文里是「不告警」）",
+   "不告警" in _sent["body"], _sent["body"][-300:])
 ck("★★ 卡 999 那一节也没被挤掉（两条 watch 互不影响）",
-   "qb_999" in _sent["metrics"], repr(sorted(_sent["metrics"])))
-ck("  链接守护那一节也在", "lg_files" in _sent["metrics"], repr(sorted(_sent["metrics"])))
+   "qb_999" in _sent["body"], _sent["body"][-300:])
+ck("  链接守护那一节也在", "lg_files" in _sent["body"], _sent["body"][-300:])
 ck("★ 基线落进了**自己的**文件（不塞 .reconcile.state）",
    D.RESEED_FREEZE_FILE.exists()
    and json.loads(D.RESEED_FREEZE_FILE.read_text(encoding="utf-8"))

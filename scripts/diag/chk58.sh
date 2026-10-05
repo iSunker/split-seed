@@ -240,9 +240,10 @@ if [ ! -d "$SD" ]; then
     bad "$SD 不在 ⇒ [3] 无法判（这个目录不在 hlink/ 里，最容易漏挂）"
 else
     # 逐个点名，**不带通配兜底** —— 通配会让"一个都没有"也打印成功（空集假绿）
+    # ★ 2026-10-05：`.notify.state` 从**必需**清单里删除 —— 通知写侧已砍，不再产生它。
     MISS=0
     for f in .daily-report.state .drive-loop.state .farm-check.state \
-             .linkguard.state .notify.state .reconcile.state
+             .linkguard.state .reconcile.state
     do
         p="$SD/$f"
         if [ -f "$p" ]; then
@@ -254,13 +255,15 @@ else
         fi
     done
     # ★ 反向：目录里**还有没有别的** .state（说明我这份清单本身过时了）
+    #   ★ 2026-10-05：白名单里**保留 `notify`** —— 通知写侧虽已砍，NAS 上可能还遗留
+    #     一个旧的 `.notify.state`，留着它免得把"遗留"误报成"清单过时"。
     EXTRA=$(ls -a "$SD" 2>/dev/null | grep -E '^\..*\.state$' \
             | grep -vE '^\.(daily-report|drive-loop|farm-check|linkguard|notify|reconcile)\.state$' || true)
     if [ -n "$EXTRA" ]; then
         na "★ 清单之外还有 .state 文件（本脚本的清单该更新了）："
         printf '%s\n' "$EXTRA" | sed 's/^/        /'
     else
-        ok "没有清单之外的 .state 文件（六件的清单是完整的）"
+        ok "没有清单之外的 .state 文件（5 件必需 + notify 遗留的白名单是完整的）"
     fi
     # ★ .linkguard.state 是最大的那个（基线）—— 特别提醒它的量级
     if [ -f "$SD/.linkguard.state" ]; then
@@ -430,11 +433,13 @@ else
 fi
 echo
 echo "  ★★ 人工核对（本脚本查不到 DSM 面板里的任务，只能读文件）——"
-echo "     DSM → 控制面板 → 任务计划：应有**三条**（排空 spool / 每日摘要 / 驱动跑批），"
-echo "     用户均为 root。**启用容器前必须先停掉「驱动跑批」那一条**，顺序不能倒："
+echo "     DSM → 控制面板 → 任务计划：**驱动跑批**这一条（用户 root）。"
+echo "     ★ 2026-10-05：通知写侧已砍 ⇒ 原先的「排空 spool / 每日摘要」两条任务**应已删掉**；"
+echo "       若还留着，它们只会空转（spool 不再产生），可以删。"
+echo "     **启用容器前必须先停掉「驱动跑批」那一条**，顺序不能倒："
 echo "       ① DSM 停「驱动跑批」  →  ② docker compose --profile drive-loop up -d drive-loop autoheal"
 echo '     ★ 启用命令是**显式**的：`docker compose up -d` **不会**起它们（带 profiles，这是防呆锁）。'
-echo "     ★ 反向核对：停错了（停成排空/摘要）不会出事，但**驱动跑批没停**就会撞 429。"
+echo "     ★ 反向核对：驱动跑批没停就会撞 429。"
 echo
 fi
 

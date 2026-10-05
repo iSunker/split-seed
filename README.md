@@ -106,7 +106,7 @@ qB recheck **不通过时不报错**，而是**就地重下**那几个 piece。�
 | **想知道 NAS 上有没有我不知道的文件** | **`ENVIRONMENT.md` `A.17.1`**（漂移哨兵）← `python scripts/diag/check-deploy-drift.py` |
 | **想推代码，但怕把密钥一起推上去** | **`ENVIRONMENT.md` `A.17.2`**（推前凭据扫描）← `python scripts/diag/scan-secrets.py`（绿了再 `git push`） |
 | 加站 / 换站 | **多站点** → SUMMARY §13.3（完整流程，可复用） |
-| 让它出事了主动通知我 | **`ENVIRONMENT.md` `A.18`**（通知 / 告警，NAS 侧发信） |
+| 让它出事了主动通知我 | ★ **本仓已不含通知写侧**（2026-10-05 砍掉）—— 见**独立通知项目**；链路参考 `ENVIRONMENT.md` `A.18`（历史） |
 | **下一步该做什么** | **`summary/26-跨会话任务盘面与旧会话清场.md`** 的 `§26.2`（主表）+ `§26.2.3`（三张总表） |
 | 下一步还能自动化什么 | **SUMMARY §16**（四条预案 + **两条前提被推翻**；原「还没做」第 7 条，2026-09-19 改指） |
 | **判「能不能建硬链接」/ 某共享在哪个卷 / 某共享 SMB 里「看不见」** | **SUMMARY §23**（`docker_ssd ∈ /volume2` 的双来源复核 · ★★ **`stat -c %d` 只在 NAS 侧成立**，Windows/SMB 侧零分辨力 ⇒ 对照量用 `df` · **枚举 ≠ 全量**）· 判据本体在 `ENVIRONMENT.md` 的 `A.3` |
@@ -367,7 +367,9 @@ docker compose run --rm reseed-orchestrator status                          # �
    ★ 这条**必须是可执行命令**，不许写成「看一眼日报」：后一种写法**没有判据形态**，
    而它正是 Part B 挂在「未验收」状态过了九次收口的原因。
    ```bash
-   grep -c packpct "//YOUR-NAS/docker_ssd/reseed/notify/log/$(date +%F).tsv"
+   # ★ 2026-10-05：通知写侧已砍 ⇒ `notify/log/*.tsv` **不再产生**，这条命令已失效。
+   #   现走容器日志（日报打进 drive-loop.log；容器里它在 /app/state/ 下）：
+   docker compose --profile drive-loop logs drive-loop | grep -c packpct
    ```
    * `>0` ⇒ **生效**：日报正文里该出现 `（95%，74/78）` 这样的「百分比 + 未约简分数」，
      分母为 0 的包写 **`（n/a）`**（**不是** `0%`），末尾还有一行 `总计：…  ← 各包之和，非平均值`。
@@ -375,8 +377,9 @@ docker compose run --rm reseed-orchestrator status                          # �
      `drive-loop.py` **在镜像里与挂载里各有一份**，只有镜像那份会随 `docker build/push` 更新
      （旧文档里「随 `deploy.sh` 更新」的说法已随 `deploy.sh` 删除而作废）。
      ```bash
-     # 判据只比 notify.py —— ★ 不要拿 drive-loop.py 的两份 md5 相比（那是个恒假的判据，见下）
-     docker compose --profile drive-loop exec drive-loop sh -c 'md5sum /app/scripts/notify.py drive-loop/scripts/notify.py'
+     # 判据只比 drive-loop.py —— ★ 2026-10-05：`notify.py` 已迁走（不在镜像里），
+     #   旧判据 `md5sum /app/scripts/notify.py` 会因文件缺失而恒空 ⇒ 已换成本文件自比。
+     docker compose --profile drive-loop exec drive-loop sh -c 'md5sum /app/scripts/drive-loop.py drive-loop/scripts/drive-loop.py'
      ```
      两行 **md5 相同** ⇒ 镜像不旧；**不同** ⇒ 镜像旧，**必须重建镜像**（`docker build` + `push` + NAS `pull`，SSH 直推配置治不了）。
      ★★ **`drive-loop.py` 不比 md5** —— 它的真源是**镜像里那份**（`run-resident.sh` 里
@@ -389,9 +392,9 @@ docker compose run --rm reseed-orchestrator status                          # �
 5. **「装不出来的单种」那一段有没有真进日报**（`SUMMARY §27`）——
    ★ 同样是**可执行命令**，不是「看一眼」。
    ```bash
-   tsv="//YOUR-NAS/docker_ssd/reseed/notify/log/$(date +%F).tsv"
-   grep -c 未完成且停滞 "$tsv"     # 应 > 0
-   grep -o 'fz_total=[0-9]*' "$tsv" # 应出现，且 == 当时的 :3060 总数
+   # ★ 2026-10-05：通知写侧已砍 ⇒ `notify/log/*.tsv` 不再产生，改看容器日志：
+   docker compose --profile drive-loop logs drive-loop | grep -c 未完成且停滞   # 应 > 0
+   docker compose --profile drive-loop logs drive-loop | grep -o 'fz_total=[0-9]*'  # 应出现
    ```
    * 两条**都**成立 ⇒ 生效。★ **只看第一条会把「还没发」误判成「没生效」**
      （日报按**日历日**去重，`--force-recreate` 不影响它 —— 详见 `§26.15`）。
@@ -627,6 +630,10 @@ sh nas-update-env.sh --no-restart    # 只改不重启
 > 原文可从 git 历史取回：`git show 94a3d0f:README.md`。
 
 ## 通知 / 告警（NAS 侧发信）
+
+> ★★ **2026-10-05：本仓的通知写侧已整体砍掉**（`notify.py` / spool / `--notify*` 全删）。
+>   要接邮件告警请用**独立通知项目**（`reseed-toolkit` 那份代码 + `ENVIRONMENT.md A.18` 的链路说明作参考），
+>   **不要在本仓复活**。下面这节是**历史搬迁记录**，其描述的 spool 链路在本仓已不存在。
 
 > **本节已搬（2026-09-20，README 瘦身成 GitHub 门面）** —— **spool 分工 · 两条通道 · 每日摘要=心跳 · DSM 任务配置（含 `21:20` 勘误）· 通知开关** —— 已搬。
 > ★ 真相源：`ENVIRONMENT.md` 的 **`A.18` 通知链路与 DSM 任务**。

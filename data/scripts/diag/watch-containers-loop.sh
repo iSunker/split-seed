@@ -90,7 +90,7 @@ while [ $# -gt 0 ]; do
         # ★ --compose-qb 同族：接住并记下，最后**只重发一次**（防"两个 --compose-qb"）。
         --compose-qb)   shift; DEFAULT_COMPOSE_DIR_QB="${1:-$DEFAULT_COMPOSE_DIR_QB}"; HAVE_COMPOSE=1 ;;
         --compose-qb=*) DEFAULT_COMPOSE_DIR_QB="${1#*=}"; HAVE_COMPOSE=1 ;;
-        # 其余参数**原样透传**给 watch-containers.sh（--dry-run / --notify / …）
+        # 其余参数**原样透传**给 watch-containers.sh（--dry-run / --selftest / …）
         *)           PASSTHRU="$PASSTHRU $1" ;;
     esac
     shift

@@ -1895,6 +1895,15 @@ python tests/test_scan_secrets.py
 
 ## A.18 通知链路与 DSM 任务（真实值）
 
+> ★★★ **2026-10-05 现状更正（先读这条再看下文）**：**本仓的通知写侧已整体砍掉。**
+>   `drive-loop.py` 里 `emit()` / `init_notifier()` / `--notify*` 参数、`notify/` 目录的 spool 写入、
+>   巡检脚本（`watch-containers.sh`）里的告警投递**全部删除**。⇒ 下文 `A.18.1` 描述的
+>   **spool → `notify-spool.sh` 链路在本仓已不存在**，`drive-loop.py --no-notify` 等开关也已不存在。
+>   ★ 本节**保留为历史/参考**（写侧事件格式、DSM ssmtp 路径坑、SMTP 判据仍是**新通知项目**要用的真相源）；
+>   **要恢复邮件 ⇒ 去独立通知项目接通道，不要在本仓复活 spool 写侧。**
+>   ⇒ 因此：本篇里凡是"`notify/log/*.tsv`、`--notify-spool`、`spool 积压"的**可执行命令**都已失效，
+>     读数改看 `docker compose logs drive-loop`（日报打进 `drive-loop.log`）。
+
 > ★★ **本节是 2026-09-20 从 `README.md` 逐字节搬来的**（README 瘦身成门面）。正文一字未改。
 > ★ 本节带**真实主机/路径/任务名**（spool 路径、`synoschedtask --get` 的转抄、
 > `//iSunker-DS423/...` 的验收命令）⇒ **别公开贴出**。
@@ -2151,10 +2160,14 @@ spool 积压: 0 条告警
 
 #### A.18.1.5 通知开关（跑批那一侧）
 
+> ★★ **2026-10-05：这一小节描述的开关已全部删除**（`--no-notify` / `--notify-cooldown-hours`
+>   / `--notify-spool` / `NOTIFY_DISABLE` / 启动日志的"通知:"那一行）。历史记录如下，**别再照抄执行**。
+
 ```bash
-python scripts/drive-loop.py --once --no-notify                  # 本次不发任何通知
-python scripts/drive-loop.py --once --notify-cooldown-hours 1    # 临时缩短冷却（调试用）
-python scripts/drive-loop.py --once --notify-spool "D:/tmp/x"    # 换个 spool
+# 历史（已失效 —— 参数不存在，跑会 argparse 报错）：
+# python scripts/drive-loop.py --once --no-notify
+# python scripts/drive-loop.py --once --notify-cooldown-hours 1
+# python scripts/drive-loop.py --once --notify-spool "D:/tmp/x"
 ```
 
 启动日志第四行会打 `通知: ✓ 启用 → <spool 路径>` / `✗ 已禁用` / `试运行（只打印，不写文件）`

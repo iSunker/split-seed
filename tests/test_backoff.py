@@ -197,8 +197,58 @@ dl = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(dl)
 
 _ev = []
-dl.emit = lambda kind, title, body="", *, key=None, metrics=None: (
-    _ev.append((kind, title, body, key, metrics)) or True)
+
+
+class _FakeLog:
+    """★ 2026-10-05：通知写侧已砍 ⇒ `update_abort_streak` 的告警不再 `emit()`，
+    改一串 `LOG.warning`（**没有 key、没有 title**）。⇒ 这里把每条 warning 收进去，
+    `_ev` 仍是 `(kind, title, body, key, metrics)` 形状以便既有断言少改：
+      · title = 第 2 条 warning（那行「⚠ 已连续 N 批…」）、body = 之后各行拼起来；
+      · key  = 按正文标记反推（「提前收工」→ consec-backoff；「批失败」→ consec-abort）。
+    """
+    disabled = False
+
+    def __init__(self):
+        self.buf = []
+
+    def info(self, *a, **k):
+        pass
+
+    def warning(self, msg, *a, **k):
+        self.buf.append((msg % a) if a else msg)
+
+    def debug(self, *a, **k):
+        pass
+
+    def exception(self, *a, **k):
+        pass
+
+    def flush(self):
+        # 只认「⚠ 已连续 …」（那是告警头），把紧随其后的几行当作正文。
+        lines = [ln for ln in self.buf if not set(ln) <= {"!"}]
+        head = next((ln for ln in lines if ln.startswith("⚠ 已连续")), "")
+        if not head:
+            self.buf = []
+            return
+        body = "\n".join(ln for ln in lines if ln != head)
+        key = "consec-backoff" if "提前收工" in head else "consec-abort"
+        _ev.append(("alert", head, body, key, {}))
+        self.buf = []
+
+
+_log = _FakeLog()
+dl.LOG = _log
+
+
+def _drain():
+    """把 `update_abort_streak` 期间的 warning 收拢成 `_ev` 条目。"""
+    _log.flush()
+
+
+def _reset():
+    """清空 `_ev` **与** 尚未收拢的 warning 缓冲（一条语句顶原来的 `_ev.clear()`）。"""
+    _log.buf.clear()
+    _ev.clear()
 
 
 def _backoff(reason="索引器 HDtime 要等到 2026-09-13 03:00:11（169 分钟 > 上限 30 分钟）"):
@@ -210,7 +260,7 @@ def _auth():
                         aborted_kind="webhook-auth")
 
 
-_ev.clear()
+_reset()
 ck("良性收工 1 批 → (真失败, 收工) = (0, 1)",
    dl.update_abort_streak((0, 0), _backoff()), (0, 1))
 ck("★ 只涨「收工」，**一点失败都没涨**", dl.update_abort_streak((0, 0), _backoff())[0], 0)
@@ -218,23 +268,25 @@ ck("★ 只涨「收工」，**一点失败都没涨**", dl.update_abort_streak(
 n = (0, 0)
 for _ in range(3):
     n = dl.update_abort_streak(n, _backoff())
+_drain()
 ck("连 3 批良性 → 计数到 3", n, (0, 3))
 ck("★ 发的 alert key 是 consec-backoff（**不是** consec-abort）",
    [e[3] for e in _ev], ["consec-backoff"])
 ck("★ 标题**不**出现「批失败」", "批失败" in _ev[0][1], False)
-ck("★ 正文点明「不是失败」+ 说清下轮会重排",
-   ("不是" in _ev[0][2] and "重新排上" in _ev[0][2]), True)
+ck("★ 正文点明「不是失败」+ 说清下轮会恢复",
+   ("不是" in _ev[0][2] and "解禁后自己会恢复" in _ev[0][2]), True)
 ck("★ 正文**不**再把人指去 force-recreate（那是上一版对退避场景的误导）",
    "force-recreate" in _ev[0][2], False)
 
 # 反向：真故障走另一条路，key 与文案都不一样
-_ev.clear()
+_reset()
 ck("真故障 → (1, 0)：良性那格空着，不动",
    dl.update_abort_streak((0, 0), _auth()), (1, 0))
-_ev.clear()
+_reset()
 n = (0, 0)
 for _ in range(3):
     n = dl.update_abort_streak(n, _auth())
+_drain()
 ck("连 3 批真故障 → (3, 0)", n, (3, 0))
 ck("★ 真故障的 key 是 consec-abort", [e[3] for e in _ev], ["consec-abort"])
 ck("★ 真故障才说「批失败」", "批失败" in _ev[0][1], True)
@@ -242,23 +294,25 @@ ck("★ 真故障才说「批失败」", "批失败" in _ev[0][1], True)
 # ★★ 互不干扰：中间夹一批良性，**不许**把真失败冲回 0 ——
 #    这一格是本节存在的一半理由：写成"互相清零"的话，真实故障会被
 #    交替出现的退避批次反复掩盖，**永远到不了 3**，告警等于没有。
-_ev.clear()
+_reset()
 _after = dl.update_abort_streak(dl.update_abort_streak((2, 0), _backoff()), _auth())
+_drain()
 ck("★★ 真失败 ×2 → 夹 1 批良性 → 真失败**不被冲掉**", _after, (3, 1))
 ck("★★ 而且这一批就报了（3 批真失败，中间那批良性没掩盖它）",
    [e[3] for e in _ev], ["consec-abort"])
 # 反向：良性也不被真失败冲掉，且**总数**把两边都算进去（谁也别想被掩盖）
-_ev.clear()
+_reset()
 _s = dl.update_abort_streak((0, 0), _auth())        # 1 批真失败
 for _ in range(3):
     _s = dl.update_abort_streak(_s, _backoff())     # 再 3 批良性
+_drain()
 ck("真失败 1 + 良性 3 → (1, 3)", _s, (1, 3))
 ck("★ 良性这边到 3 就报（那批真失败没把它冲回 0）",
    [e[3] for e in _ev], ["consec-backoff"])
 ck("★ 混着出现时，标题把「共 4 批没跑成」写出来（否则 3 会被念成「连续 3 批」）",
    "共 4 批没跑成" in _ev[0][1], True)
 # ★ 反向控制：**整批异常**也按真失败算（它可一点都"良性"不起来）
-_ev.clear()
+_reset()
 ck("整批异常 → 真失败",
    dl.update_abort_streak((0, 0), None, failed=True), (1, 0))
 # ★ 兜底方向：`aborted` 非空却认不出种类 → **按真失败算**（宁可吵，不可静默）
@@ -271,10 +325,11 @@ ck("没跑（stats=None 且没 failed）→ 也清零",
    dl.update_abort_streak((5, 5), None), (0, 0))
 # ★ 常见情况下不补那句括号（补了是噪音）—— 上一条刚确认 5+5 被清零了，
 #   这里单独跑一条干净的 3 连良性，确认标题就是简单的「连续 3 批提前收工」。
-_ev.clear()
+_reset()
 n = (0, 0)
 for _ in range(3):
     n = dl.update_abort_streak(n, _backoff())
+_drain()
 ck("★ 单一成因时不啰嗦（标题里没有「共 … 批」）", "共 " in _ev[0][1], False)
 
 print("\n== ⑨ ★ 只禁了一部分站（还有健康站）→ 超上限也**不许中止**，照发 ==")
@@ -358,7 +413,7 @@ def expire_now(call_no, clock):
         set_row(db12, 2, "RATE_LIMITED", ms(clock.t - datetime.timedelta(seconds=1)))
 
 
-_ev.clear()
+_reset()
 st12, sess12, clock12 = run_session(db12, n=8, on_item=expire_now,
                                     on_event=lambda *a: _ev.append(a))
 _warn = " ".join(a[1] for a in _ev if a and a[0] == "warn")
@@ -394,7 +449,7 @@ def expire_2min(call_no, clock):
         set_row(db13, 2, "RATE_LIMITED", ms(clock.t - datetime.timedelta(minutes=2)))
 
 
-_ev.clear()
+_reset()
 run_session(db13, n=8, on_item=expire_2min,
             on_event=lambda *a: _ev.append(a))
 _w14 = " ".join(a[1] for a in _ev if a and a[0] == "warn")

@@ -62,7 +62,7 @@ NAS 侧用 DSM 任务计划，每 15 分钟唤醒一次：
 #   ★ NAS 上系统 python3 就是 3.8.15（DSM 自带，没有更新的）——
 #     所以这不是「顺手加的好习惯」，是运行前提：去掉它 drive-loop 在 NAS 上
 #     会在 import 阶段就崩，且**连一行日志都写不出来**（崩在 logging 配置之前）。
-#   本项目的 state.py / notify.py / reseed-state.py 早就带了这行，这里补齐。
+#   本项目的 state.py / reseed-state.py 早就带了这行，这里补齐。
 from __future__ import annotations
 
 import argparse
@@ -116,17 +116,15 @@ STATE_DIR = Path(os.environ.get("DRIVE_STATE_DIR") or HERE).resolve()
 
 from orchestrator import state as S  # noqa: E402
 
-# 通知（**已剥离** 2026-10-04）。原先这里 `import notify`，把纯文本事件写进
-# NAS 本机的 spool，再由 NAS 侧 `notify-spool.sh` 读 DSM 自己的 SMTP 发信。
-# ⇒ 该模块整体迁去独立项目（邮件通知告警；见本仓 `重构方案.md` §11）。
-# ★ 保留这次 `import` 尝试 + `try` 兜底：**万一** NAS 上仍留着一份 `notify.py`
-#   （同目录、可导入），通知就照旧工作；缺了也不影响跑批 —— 通知永远是附属功能。
-# ★★ 不要"顺手删干净"：`emit()` 的调用点在十几处、且分散在自检里，删调用=改一大片
-#   风险面；而**挂掉开关**（此处的降级 + `--no-notify`）已经足以让它静默。
-try:
-    import notify as _notify  # noqa: E402
-except Exception:  # noqa: BLE001
-    _notify = None
+# 通知（**已砍掉** 2026-10-04，随后 2026-10-05 连"挂掉开关"的残留也清干净）。
+# 原先这里 `import notify`，把纯文本事件写进 NAS 本机的 spool，再由 NAS 侧
+# `notify-spool.sh` 读 DSM 自己的 SMTP 发信。**该模块整体迁去独立项目**
+# （`D:\Projects\nas里pt相关程序邮件通知告警项目\reseed-toolkit`）。
+# ⇒ 本文件**不再 import notify**，也不再有任何 spool 写侧：`emit()` /
+#   `init_notifier()` / `reset_notify_count()` / `--notify*` 参数**全部删除**。
+# ★ 残留的"告警语义"仍在日志里（`LOG.warning/error`）—— 那部分**不删**：
+#   它们是跑批自己的诊断输出，与"发不发信"无关。
+# ★ 想恢复邮件：去独立项目接 `emit`，不要在本仓复活 spool 写侧。
 
 LOG = logging.getLogger("drive-loop")
 
@@ -257,103 +255,14 @@ def first_existing(rel: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
-# 通知出口（**已剥离** 2026-10-04 —— 见文件头 import 处与本仓 `重构方案.md` §11）
+# 通知出口（**已整体砍掉** 2026-10-05）
 # --------------------------------------------------------------------------- #
-# 这一段的函数**全部保留**（`emit` / `reset_notify_count` / `notify_delivered` /
-# `describe_notifier` / `init_notifier`），因为 `emit()` 的调用点散在十几处自检里。
-# ★ 剥离的方式是「**挂掉开关**」而不是「删调用」：`notify.py` 一缺（镜像里已不 COPY、
-#   NAS 目录也会被清理），`_notify = None` ⇒ `_NOTIFIER` 永远 None ⇒ 所有出口 no-op。
-#   ⇒ 行为等价于停用，而**改动面只在导入处**（一处），不动那十几处调用点。
-#
-# 事件分两档，由 notify.Event.level 决定 NAS 侧怎么处理：
-#
-#   alert       → **立刻发信**（自检报警 / 连续失败 / 整批异常）
-#   batch, info → 只归档，进**每日摘要**（本批新增做种数、全部干完等）
-#
-# ★ 这正是「坏消息 + 每日摘要」的分工：好消息不该半夜吵醒人，
-#   但也不能只躺在几万行日志里 —— 摘要就是它的去向。
-#
-# ★ 为什么用模块级单例，而不是给每个函数加参数：
-#   这些自检散落在 check_indexers / update_abort_streak / once_round 里，
-#   签名各不相同，层层传参会污染每一个调用点。通知是**旁路**，
-#   和 LOG 同性质 —— 用同样的方式持有最省事（测试里可直接赋值 _NOTIFIER）。
-_NOTIFIER = None
-
-
-def init_notifier(args):
-    """按命令行参数建 Notifier。可重复调用（重建）。"""
-    global _NOTIFIER
-    if _notify is None:
-        return None
-    _NOTIFIER = _notify.notifier_from_args(args)
-    return _NOTIFIER
-
-
-def emit(kind: str, title: str, body: str = "", *,
-         key: str | None = None, metrics: dict | None = None) -> bool:
-    """投递一个通知事件。未启用/写失败 → False。**绝不抛异常**（见 notify.Notifier）。"""
-    if _NOTIFIER is None:
-        return False
-    return _NOTIFIER.emit(kind, title, body=body, key=key, metrics=metrics)
-
-
-def reset_notify_count() -> None:
-    """回收**告警**配额 —— 在**批与批之间**调用（见 `run_round` 底部）。
-
-    ★★★ 2026-09-23 修的那个 bug 就在这里：`MAX_PER_RUN` 是「**一次喷发**最多几条」
-      的闸门，可它的计数器（`Notifier._count`）在**常驻**进程里**没有任何人回收** ——
-      进程活几周，涨到 12 就再也不降。而 `run_round` 每轮至少发一条 `batch`，
-      ⇒ 第 11 轮之后**所有**通知（含**真告警**）全被静默丢弃，唯一痕迹是日志里
-      一行 WARNING。形状正是本项目最忌的那种：**该响的时候没响，而看起来一切正常**。
-
-    ★ 位置必须在这里（`run_round` **底部**、`after_batch_reports()` **之后**），
-      不能挪到 `emit` 之前：`run_round` 内部是**先** `emit("batch")`、**后**
-      `after_batch_reports()`（台账 +「有站点在退避」的即时告警）。若在 `emit`
-      之前回收，重置后的第一条立刻被这一轮的 batch 自己吃掉，告警又轮空。
-
-    ★ 未启用通知时是空操作（`_NOTIFIER is None`）—— 与 `emit` 同一套降级形状。
-    """
-    if _NOTIFIER is None:
-        return
-    try:
-        _NOTIFIER.reset_count()
-    except Exception as e:  # noqa: BLE001 —— 通知是旁路，绝不能让跑批失败
-        LOG.debug("回收通知配额失败（忽略）: %s", e)
-
-
-def notify_delivered() -> int:
-    """**自上次回收以来**投出去的通知条数（未启用 → -1）。
-
-    ★ 在 `run_round` 的用法下就是「**本批**投出去几条」—— `reset_count()` 挂在
-      `run_round` 底部（批与批之间），所以这个数与告警配额计数器**同尺度**。
-      ★ 与 `_count` 同生共死是刻意的：留一个「生命周期累计」的不同步计数器，
-        就多一个**同词不同义**的字段（本项目反复栽在这上面）。
-
-    ★ 这是**「该响没响」专配的计数器**：本项目的失败方式常常是「**想都没想到要发**」——
-      那时 spool 里什么也没有，而唯一带这个数的 `batch` 行**自己也不发了**。
-      把它挂进批次 metrics，「**其实什么都没发出去**」就变成一个**能看见**的读数。
-    ★ `-1` 表示「通知没启用」，与 `0`（启用了、但本批一条没发）**必须分开** ——
-      合成一个数就又变成「`n/a` ≠ `0` ≠ 没事」那个坑（`ERR-AI-03`）。
-    """
-    if _NOTIFIER is None:
-        return -1
-    try:
-        return int(_NOTIFIER.delivered)
-    except Exception:  # noqa: BLE001
-        return -1
-
-
-def describe_notifier() -> str:
-    """给启动日志用的一句话，让人一眼看出通知到底通没通。"""
-    if _notify is None:
-        return "✗ 未启用（通知模块已剥离，找不到 notify.py）"
-    if _NOTIFIER is None:
-        return "✗ 未启用"
-    if not _NOTIFIER.enabled:
-        return "✗ 已禁用（--no-notify 或 NOTIFY_DISABLE）"
-    if _NOTIFIER.dry_run:
-        return "试运行（只打印，不写文件）"
-    return f"✓ 启用 → {_NOTIFIER.spool}"
+# 原先这一段的 `emit` / `reset_notify_count` / `notify_delivered` /
+# `describe_notifier` / `init_notifier`（外加模块级 `_NOTIFIER` 单例）**全部删除**。
+# 通知模块（写侧 spool）已整体迁去独立项目
+# `D:\Projects\nas里pt相关程序邮件通知告警项目\reseed-toolkit`，本仓不留任何写侧。
+# ★ 与之相配：所有 `emit("...")` 调用点改为**纯日志**（`LOG.info/warning/error`），
+#   语义不变、只是不再往 spool 投事件。想发信 ⇒ 去独立项目接通道。
 
 
 # --------------------------------------------------------------------------- #
@@ -477,21 +386,8 @@ def update_abort_streak(prev: tuple[int, int], stats: S.DriveStats | None, *,
         LOG.warning("  这**不是**「批失败」—— 本批条目没失败，只是站点还在退避。")
         LOG.warning("  解禁后自己会恢复；长期如此就考虑把这个站从 --indexers 摘掉。")
         LOG.warning("!" * 62)
-        # ★ key 与 `consec-abort` **不同**：这是两个问题，各自的 12 小时冷却。
-        emit("alert",
-             f"连续 {n} 批提前收工（站点退避中）{mixed}",
-             body=(f"最近一次：{reason}\n提前收工批数：{n}{mixed}\n\n"
-                   "★ 这条**不是**「批失败」：本批的条目**没有失败**"
-                   "（metrics 里是 `failed=0`），\n"
-                   "  只是站点还在退避、等到超过 `--max-wait` 就先收工，"
-                   "**剩下的条目下轮会重新排上**。\n\n"
-                   "要不要管它：\n"
-                   "  · 偶尔几次 —— 不用管，退避解禁后自己恢复；\n"
-                   "  · 连续多批都这样 —— 那个站长时间在限流。看 Prowlarr 里它的状态，\n"
-                   "    必要时把它从 `--indexers` 里摘掉，别让一个站拖住另外几个。\n"),
-             key="consec-backoff",
-             metrics={"streak": n, "streak_total": total,
-                      "kind": BACKOFF_ABORT_KIND})
+        # ★ 通知写侧已砍掉（2026-10-05）：这里原先 `emit("alert", …, key="consec-backoff")`。
+        #   语义保留在**上面的日志**里；要不要发信由独立通知项目决定。
         return hard, n
 
     n = hard + 1
@@ -507,20 +403,8 @@ def update_abort_streak(prev: tuple[int, int], stats: S.DriveStats | None, *,
     LOG.warning("   ② .env 改了但没 force-recreate（容器里还是旧配置，见 SUMMARY §13.6）")
     LOG.warning("  请人工看一眼 cross-seed 日志与 Prowlarr。")
     LOG.warning("!" * 62)
-    # 推给对方。★ 固定 key + 12 小时冷却 = 问题不修每天最多提醒 2 次：
-    #   连续失败第 4、5、6… 批都命中同一个 key，不会变成每 30 分钟一封。
-    emit("alert",
-         f"连续 {n} 批失败（{reason}）{mixed}",
-         body=(f"最近一次失败：{reason}\n连续失败批数：{n}{mixed}\n\n"
-               "无人值守下通常意味着：\n"
-               "  ① 鉴权 / 路径问题（webhook 返回 400/401/403 时最可能）—— 看 key 与 URL\n"
-               "  ② .env 改了但容器没 force-recreate（见 SUMMARY §13.6）\n"
-               "  ③ 跑批抛异常 —— 看 drive-loop.log 的 traceback\n\n"
-               "请人工看一眼 cross-seed 日志与 Prowlarr。\n"
-               "★ 「站点退避超时」**不算在这里**（那是良性的，见 `consec-backoff`）。\n"
-               "（本条同 key 12 小时内不重复发；修好后自然消失。）"),
-         key="consec-abort", metrics={"streak": n, "streak_total": total,
-                                      "kind": kind})
+    # ★ 通知写侧已砍掉（2026-10-05）：这里原先 `emit("alert", …, key="consec-abort")`。
+    #   语义保留在**上面的日志**里（连续失败批数、可能原因清单）。
     return n, backoff
 
 
@@ -547,14 +431,8 @@ def alert_if_all_done(pack_count: int, db: str, packs: list[str]) -> bool:
     LOG.warning("   计划任务可保留（新片/新站接入后会自动变回待搜），")
     LOG.warning("   或手动停掉：schtasks /Delete /TN \"reseed-drive-loop\" /F")
     LOG.warning("=" * 62)
-    # ★ 归到 batch（进每日摘要），不归 alert：这是**里程碑**，不是故障。
-    #   按「坏消息立刻发 + 每日摘要」的分工，它应该出现在日报里而不是半夜的告警里。
-    #   固定 key + 冷却：全干完之后每次唤醒都会走到这里，不冷却会刷屏。
-    emit("batch", f"全部登记的包已无待搜项（{pack_count} 个包）",
-         body=("所有登记包的片子都已经搜过/做种，自动循环已无事可做。\n\n"
-               "  计划任务可以保留 —— 接入新站或新增片子后会自动变回待搜；\n"
-               "  也可以停掉：schtasks /Delete /TN \"reseed-drive-loop\" /F\n"),
-         key="all-done", metrics={"packs": pack_count})
+    # ★ 通知写侧已砍掉（2026-10-05）：这里原先 `emit("batch", …, key="all-done")`。
+    #   里程碑语义保留在**上面的日志**里（🎉 全部干完）。
     return True
 
 
@@ -605,62 +483,27 @@ def check_indexers(args) -> None:
         LOG.warning("  编号是 `TORZNAB_URLS` 里的那个（`#N` = `/N/api`），不是 Prowlarr 界面序号。")
         LOG.warning("  常见原因：`.env` 里删了站但容器没重建，或该站被 Prowlarr 禁用。")
         for lbl in unnamed:
-            emit("alert", f"索引器拉不到名字：{lbl}",
-                 body=(f"cross-seed 里有个 active 索引器取不回 caps：{lbl}\n\n"
-                       "  ★ 编号 N 是 TORZNAB_URLS 里的那个（#N = /N/api），\n"
-                       "    **不是** Prowlarr 界面里的索引器序号 —— 别找错站。\n\n"
-                       "  常见原因：\n"
-                       "   ① .env 里删了这个站，但容器没重建（容器里还留着它）\n"
-                       "   ② 该站被 Prowlarr 禁用了\n"
-                       "   ③ 站点返回 410/403 或卡 Cloudflare\n\n"
-                       # ★ 查证命令必须**自带脱敏**（2026-09-13）：
-                       #   `TORZNAB_URLS` 是一串逗号分隔的 URL，**每条各带一个
-                       #   `apikey=`**，值就是 Prowlarr 的应用级 key —— 它**完全控制
-                       #   Prowlarr**，而 Prowlarr 里存着所有 PT 站的 cookie。
-                       #   原样 `grep TORZNAB_URLS` 出来 = 把凭据打进终端/聊天。
-                       #   sed 只把 `apikey=` 的**值**换成 `<redacted>`，键名与 `/N/api`
-                       #   都留着 —— 判「容器里还剩哪个站」靠的是那两样，不是 key。
-                       "  查证（★ 先脱敏再看，**别把原样输出粘进聊天/命令行**）：\n"
-                       "    docker inspect reseed-cross-seed | grep TORZNAB_URLS"
-                       " \\\n      | sed -E 's/(apikey=)[^,&]+/\\1<redacted>/g'\n"
-                       "  ★ 上面那行里每个 URL 都带一个 apikey=（Prowlarr 的 key），\n"
-                       "    原样 grep 出来就是明文凭据；sed 只是把它换成 <redacted>。\n"),
-                 key=f"indexer-unnamed:{lbl}", metrics={"indexer": lbl})
+            # ★ 通知写侧已砍掉（2026-10-05）：原先对每个拉不到名字的站 `emit("alert")`。
+            LOG.warning("    · 拉不到名字的索引器：%s（编号即 TORZNAB_URLS 里的 #N=/N/api）",
+                        lbl)
     if missing:
         LOG.warning("⚠ cross-seed 实际会搜 %s，但 --indexers 没列 ——"
                     " 这些站的搜索结果会被状态机**漏记**（→ 重复搜 / 永不重搜）。",
                     ", ".join(missing))
         LOG.warning("  建议把 --indexers 改成：--indexers %s", ",".join(named))
-        emit("alert", f"--indexers 漏了 {len(missing)} 个站：{', '.join(missing)}",
-             body=(f"cross-seed 实际会搜：{', '.join(named)}\n"
-                   f"但 --indexers 只列了：{', '.join(sorted(mine))}\n\n"
-                   f"漏掉的：{', '.join(missing)}\n\n"
-                   "后果：这些站搜到的结果会被状态机**漏记** ——\n"
-                   "  要么反复重搜（浪费站点额度），要么永远不重搜。而且**不报错**，只是数算错。\n\n"
-                   f"修法：把 --indexers 改成  {','.join(named)}\n"
-                   "     ★ 改 **<compose>/drive-loop/run.sh** 里那一行"
-                   "（--indexers HDFans,NanyangPT）——\n"
-                   "       电脑端已退役，没有第二处要改了。\n"),
-             key=f"indexer-missing:{','.join(missing)}", metrics={"missing": len(missing)})
+        # ★ 通知写侧已砍掉（2026-10-05）：原先 `emit("alert", …, key="indexer-missing:…")`。
+        #   修法提示保留在**上面的日志**里。
     if extra:
         LOG.warning("⚠ --indexers 列了 %s，但 cross-seed 根本不会搜 ——"
                     " 状态机会把它们记成'搜过'，实际是假的（→ 永远不会去搜）。",
                     ", ".join(extra))
-        emit("alert", f"--indexers 多了 {len(extra)} 个站：{', '.join(extra)}",
-             body=(f"--indexers 列了：{', '.join(extra)}\n"
-                   f"但 cross-seed 根本不会搜它们（不在它的 TORZNAB_URLS 里）。\n\n"
-                   "后果：状态机会把这些站记成「搜过」，实际是假的 —— 片子永远不会被搜。\n\n"
-                   "修法：从 --indexers 里删掉它们\n"
-                   "     ★ 改 **<compose>/drive-loop/run.sh** 里那一行"
-                   "（--indexers HDFans,NanyangPT）——\n"
-                   "       电脑端已退役，没有第二处要改了。\n"
-                   "     ⚠ 但删之前先分清是哪种「多了」—— 删错了会把新站**永远**排除：\n"
-                   "       ① 只在 --indexers 里写过、.env 里没有它 → 照上面删掉。\n"
-                   "       ② .env 的 TORZNAB_URLS 里**有**它 → 那是容器没重建\n"
-                   "          （env_file 的改动不重建容器不生效），正确修法是\n"
-                   "             sudo docker compose up -d --force-recreate cross-seed\n"
-                   "          **不是**删 --indexers。\n"),
-             key=f"indexer-extra:{','.join(extra)}", metrics={"extra": len(extra)})
+        # ★ 通知写侧已砍掉（2026-10-05）：原先 `emit("alert", …, key="indexer-extra:…")`。
+        #   这里把"怎么分清是哪种多了"的处置**原样搬进日志**（原本在邮件正文里）。
+        LOG.warning("  ⚠ 但删之前先分清是哪种「多了」—— 删错了会把新站**永远**排除：")
+        LOG.warning("    ① 只在 --indexers 里写过、.env 里没有它 → 删掉它。")
+        LOG.warning("    ② .env 的 TORZNAB_URLS 里**有**它 → 那是容器没重建：")
+        LOG.warning("       sudo docker compose up -d --force-recreate cross-seed")
+        LOG.warning("       （**不是**删 --indexers）。")
     if not (unnamed or missing or extra):
         LOG.info("索引器自检通过：cross-seed 实际会搜 %s，与 --indexers 一致。",
                  ", ".join(named))
@@ -793,25 +636,12 @@ def check_env_applied(args) -> None:
     LOG.warning("    验证：本条警告消失（上面的「索引器自检」也会跟着变绿）。")
     LOG.warning("!" * 62)
 
-    # 推给对方。**逐 (url, code) 一条** —— 每个都是独立可修的问题，
-    # 分开去重才能在「修好一个、还剩一个」时继续提醒。
+    # 逐 (url, code) 报一行 —— 每个都是独立可修的问题。
+    # ★ 通知写侧已砍掉（2026-10-05）：原先这里对每个 (url, code) `emit("alert")`。
     for (url, code), n in sorted(hits.items(), key=lambda kv: -kv[1]):
-        emit("alert", f".env 未生效：{url} 返回 {code} ×{n}",
-             body=(f"cross-seed 最近 {STALE_ENV_WINDOW_SEC / 3600:.0f} 小时内"
-                   f"**一直够不着**这个索引器。\n\n"
-                   f"  地址: {url}\n"
-                   f"  HTTP: {code}\n"
-                   f"  次数: {n}\n"
-                   f"  最近一次: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(newest))}\n\n"
-                   "★ 本项目的头号复发坑：**改了 .env，但容器没重建**。\n"
-                   "  410 = 该索引器在 Prowlarr 里已经没了，容器里的 TORZNAB_URLS 还留着它；\n"
-                   "  401 = apikey 对不上；403 = 该站被禁用。三者多半是同一件事。\n\n"
-                   "  ⚠ `docker compose restart` **不重新注入环境变量**，必须：\n\n"
-                   f"  cd {CROSSSEED_DIRS[0]} \\\n"
-                   "    && sudo docker compose up -d --no-deps --force-recreate cross-seed\n\n"
-                   "  修好后本条自动消失（同 key 12 小时内不重复发）。\n"),
-             key=f"env-stale:{url}/{code}",
-             metrics={"url": url, "code": code, "n": n})
+        LOG.warning("  · .env 未生效：%s 返回 %s ×%d（最近 %s）",
+                    url, code, n,
+                    time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(newest)))
 
 
 # --------------------------------------------------------------------------- #
@@ -918,17 +748,10 @@ def alert_blocked_indexers(args, *, now: datetime | None = None) -> int:
     n = 0
     for b in blocked:
         until = b.until.strftime("%m-%d %H:%M") if b.until else "未知"
-        if emit("alert", f"站点退避中：{b.name}",
-                body=(f"{b.name} 此刻在退避（{b.status}），解禁 {until}。\n"
-                      "发给它的搜索会被跳过 —— drive-loop 自己会等它解禁，"
-                      "**不需要手动处理**。\n"
-                      "但如果**连续几天**都在退避，说明我们搜得太勤："
-                      "把周期调大（--cadence-days），或者考虑换站。"),
-                key=f"indexer-blocked:{b.name}",
-                metrics={"indexer": b.name, "status": b.status}):
-            n += 1
-    if n:
-        LOG.info("已投递 %d 条「站点正在退避」告警", n)
+        LOG.warning("  ⏸ 站点退避中：%s（%s）解禁 %s —— 不用手动处理，"
+                    "连续几天都在退避就把 --cadence-days 调大或考虑换站。",
+                    b.name, b.status, until)
+        n += 1
     return n
 
 
@@ -939,11 +762,12 @@ def alert_blocked_indexers(args, *, now: datetime | None = None) -> int:
 # 搬迁对它**透明**。**唯一能证伪这个推断的观测**，就是看它次日 01:45（它的
 # cron 是 `45 1 * * *`）跑完之后，`:3060` 上 `IYUU自动辅种` 的条数还在不在涨。
 #
-# ★ 只记账、**不告警**：这是个慢性观测（要几天才有结论），而即时 alert 通道必须
-#   留给急性故障 —— 否则就是 §16.1.3 警告过的"骚扰多了你去建过滤规则，然后连真
-#   告警一起过滤掉"。它冻住了也不该当场喊。
-# ★ 数字必须同时进 `metrics`：notify 的 TSV 流水只记 ts/kind/title/**metrics**，
-#   **不记正文**。只写在正文里，回头分析时是拿不到的。
+# ★ 只记账、**不告警**：这是个慢性观测（要几天才有结论），而"急性故障才喊"是
+#   这条通道的根本纪律 —— 骚扰多了人就会建过滤规则，然后连真告警一起过滤掉。
+#   它冻住了也不该当场喊。（"alert 通道"原指邮件；写侧已砍掉，纪律不变。）
+# ★ 数字必须同时进 `metrics`：日报渲染时**只读 metrics**，不读正文。
+#   （原先是 notify 的 TSV 流水只记 ts/kind/title/**metrics**；通知写侧已砍掉，
+#    但"数字要进 metrics 才留得下来"这条规则不变。）只写在正文里，回头看是拿不到的。
 IYUU_TAG = "IYUU自动辅种"
 IYUU_BASELINE = 100     # 2026-09-12 搬迁实测（SUMMARY §18.8 的构成表）
 
@@ -1369,29 +1193,18 @@ def reseed_freeze_watch(args) -> tuple[str, dict]:
         #   冒充「本项目」或「IYUU」。要让来源永远可追溯。
         note += f"\n  （另有 {n_oth} 条挂了别的 tag，未计入上面任一行）"
     if not first and new:
-        # ★ 只在**真新增**时发即时告警，且 key 是固定字面量（见常量处的说明）。
+        # ★ 只在**真新增**时喊一声（原先 `emit("alert", …, key=RESEED_FREEZE_ALERT_KEY)`）。
         #   正文里**绝不**带 hash / 种子名 / tracker / content_path。
-        emit("alert", f"装不出来的单种新增 {len(new)} 条",
-             body=(f"qB（分母 {cur_by['total']}）里出现 {len(new)} 条新的"
-                   "「未完成且停滞」单种：\n"
-                   f"  ① 装不出来（缺口 ≤ 0.1%，永远补不上）： {n_ub} 条\n"
-                   f"  ② 没 peer（一个字节都没下到）： {n_np} 条\n"
-                   "这两类都**不会自己好**：前者缺的是发布组写进种子、而农场里"
-                   "根本没有的附件（`.nfo`/`.jpg`），没有 peer 就永远补不上；"
-                   "后者连源碎片都没见过。\n"
-                   "★ **本工具不做任何处置**（不暂停、不打标签、不删）—— 按你的"
-                   "要求这一步只负责认出来并告诉你。定位具体是哪几条："
-                   "跑 `scripts/diag/reseed-freeze-report.py --show-hashes`。\n"
-                   "★ 真危害是**永久占位 + 踩 HnR**；qB 只重下缺的 piece，"
-                   "所以**源文件目前还没被写穿**（那是 linkguard 在盯的事）。"),
-             key=RESEED_FREEZE_ALERT_KEY,
-             metrics={"fz_new": len(new), "fz": len(cur),
-                      "fz_total": cur_by["total"]})
+        # ★ 通知写侧已砍掉（2026-10-05）：改为纯日志（下面这句）。
+
+        LOG.warning("  ⚠ 装不出来的单种新增 %d 条（分母 %d）：装不出来 %d / 没 peer %d —— "
+                    "本工具不做任何处置，定位用 "
+                    "`scripts/diag/reseed-freeze-report.py --show-hashes`。",
+                    len(new), cur_by["total"], n_ub, n_np)
 
     # ★ 键名一律 `fz_` 前缀，且**绝不**恰好叫 `pack`、**绝不**含空格 ——
-    #   `notify.py:_render` 会把 key 里的空格换成 `_`，`fz x=1` 这种写法
-    #   能裂出一个 key 恰好是 `pack` 的段，从而**静默污染**
-    #   `notify-spool.sh:721` 的批次计数（`tests/test_reseed_freeze.py` 里钉住了）。
+    #   （原先这条是给 `notify.py:_render` 的 key 规范化用的；通知写侧已砍掉，
+    #    但 metrics 键名仍是**对外的稳定口径**，保持不动。）
     return note, {"fz": len(cur), "fz_new": 0 if first else len(new),
                   "fz_ours": n_our, "fz_iyuu": n_iyuu,
                   "fz_np": n_np, "fz_np_iyuu": len(np_.get(RESEED_FREEZE_SRC_IYUU) or []),
@@ -1572,9 +1385,8 @@ def linkguard_watch(args) -> tuple[str, dict]:
 #   两个脚本现在是薄壳，核的是同一份实现 —— 判据只有一份。
 #
 # ★ 为什么挂在**日报**里而不是每批：日报是这套系统里唯一"每天恰好一次"的
-#   观测出口，而且 notify 只把 `metrics` 落进 TSV 流水（不记正文）——
-#   放进 `report_daily` 的 metrics，这些数才真的**留得下来**。
-#   同 `iyuu_watch`。
+#   观测出口 —— 放进 `report_daily` 的 metrics，这些数才真的**留得下来**。
+#   （原话还有半句"notify 只记 metrics 不记正文"；通知写侧已砍掉，理由不变。）
 _REDACT_SUB = (
     (re.compile(r"(apikey=)[^,&\s)\]]+", re.I), r"\1<redacted>"),
     (re.compile(r"(passkey=)[^,&\s)\]]+", re.I), r"\1<redacted>"),
@@ -1839,15 +1651,8 @@ def reconcile_watch(args) -> tuple[str, dict]:
                 else:
                     ev += ("   ★ 那个**也数不到** ⇒ 这才可能是**匹配逻辑真的坏了**"
                            "—— 去核 `_RE_FOUND` 与那六个字面量。\n")
-            emit("alert", "观测对账：本日尚无 Found 行（判据不可判）",
-                 body=("当日日志（从 00:00 到现在）里**一条 `] Found ` 都没有** ⇒ "
-                       "判据**没走到**，下面的 0 **什么都不说明**。\n"
-                       "★ 两种可能，**别默认是后者**：\n"
-                       "   ① 今天还没搜出去（站点退避时会这样）—— 当日口径的正常表现；\n"
-                       "   ② 匹配逻辑真的坏了。\n"
-                       + ev +
-                       f"日志: {log_path}\n总行数: {c.total_lines}\n"),
-                 key="reconcile-controls", metrics={"fa": c.a, "fb": c.b})
+            LOG.warning("观测对账：本日尚无 Found 行（判据不可判）—— 当日日志里一条 "
+                        "`] Found ` 都没有，下面的 0 什么都不说明。%s", ev.strip())
         elif c.delta:
             # ★★★ 顺序很关键：这一支必须排在 `b == 0` **前面**。
             #   旧顺序是 `controls_ok → b == 0 → delta`，于是 `a > 0 且 b == 0`
@@ -1857,30 +1662,20 @@ def reconcile_watch(args) -> tuple[str, dict]:
             #   看告警的人只读正文，于是会去查「为什么没搜」，而真问题是正则整条失效。
             #   ★ 错的不是数，是它**指向的排查动作**（同 §18.17.3 那条）。
             head = "\n".join("   " + _redact(s)[:190] for s in c.unparsed) or "   （没留样本）"
-            zero = ""
+            extra = ""
             if c.b == 0:
-                zero = (f"★★ b == 0：**一条都没吃下** —— 形状明明数到了 {c.a} 行。\n"
-                        f"   这不是「今天没搜出去」（那要 a == 0），是正则**整条失效**。\n")
-            emit("alert", f"观测对账：{c.delta} 行「形状对、正则没吃下」",
-                 body=(zero +
-                       "有行满足目标形状的六个字面量，但**生产正则 `_RE_FOUND` 没吃下**。\n"
-                       "这些行在台账里等于**没发生过** —— 抓不到 = 不存在。\n"
-                       f"日志: {log_path}\n"
-                       "★ 常见成因：站名/片名里出现了正则不该吃的字符（09-12 修过一次）。\n"
-                       "---- 没吃下的行 ----\n" + head + "\n"),
-                 key="log-parse-miss", metrics={"fa": c.a, "fb": c.b, "fd": c.delta})
+                extra = (f"   ★★ b == 0：**一条都没吃下** —— 形状明明数到了 {c.a} 行，"
+                         "这不是「今天没搜出去」（那要 a == 0），是正则**整条失效**。\n")
+            LOG.warning("观测对账：%d 行「形状对、正则没吃下」\n%s   ★ 这些行在台账里"
+                        "等于没发生过（抓不到=不存在）\n%s",
+                        c.delta, extra, head)
         elif c.b == 0:
             # ★ 走到这里 ⇒ `delta == 0` 且 `a == 0`（上面那支已把 delta > 0 接走）。
             #   即**形状一条都没数到** —— 不是「正则没吃下」（那样 delta 会 > 0），
             #   是**根本没有 Found 行**。§18.17.3：零命中既可能是没事，也可能是没跑。
-            emit("alert", "观测对账：一条 Found 都没抓到",
-                 body=(f"形状行 a == 0，正则行 b == 0（★ 不是「正则没吃下」——"
-                       f"那样 delta 会大于 0，那是另一条告警）。\n"
-                       "**这不是「干净」** —— 要么真没搜出去过，要么日志抓错了文件。\n"
-                       "回灌靠这些行推「哪个站搜到了」，b 长期为 0 时状态机的「匹配到单种」\n"
-                       "会一直是 0。\n"
-                       f"日志: {log_path}\n总行数: {c.total_lines}\n"),
-                 key="reconcile-empty", metrics={"fa": c.a, "fb": c.b})
+            LOG.warning("观测对账：一条 Found 都没抓到（a=%d b=%d）—— **这不是干净**："
+                        "要么真没搜出去过，要么日志抓错了文件。日志 %s 总行 %d。",
+                        c.a, c.b, log_path, c.total_lines)
 
         # ★★★ 2026-10-02 加（§32.16 第 7 个真 bug 的处置）：`other_found` 非空 ⇒ **投告警**。
         #   为什么：`other_found` 是个**兜底格** —— 任何**没预料到的** `] Found ` 形状都掉
@@ -1909,21 +1704,9 @@ def reconcile_watch(args) -> tuple[str, dict]:
                             if "torrents for" in k), 0)
             detail = "\n".join(f"   {v:>5}  {k}" for k, v in
                                sorted(c.other_found.items(), key=lambda kv: -kv[1])[:6])
-            emit("alert", f"观测对账：{n_other} 行「别的 Found 形状」（判据没识别）",
-                 body=("当日日志里有一批 `] Found ` 行，满足 L1 字面量，但**不满足**目标形状"
-                       "（六字面量的合取）⇒ 掉进兜底格 `other_found`，**既不计入 a、也不报警**"
-                       "（这正是它历史上藏住 bug 的方式）。\n"
-                       f"★★ 其中**三行式** `[webhook] Found N torrents for {{` 约 {n_3line} 行 —— "
-                       "它**已知、且刻意不进 a**：三行式**没有站名**（只有 `path:`），"
-                       "状态机推不出「哪个站搜到了」。\n"
-                       "★ **a 的口径是「单行式（可回灌）已识别条数」，不是「搜出去总量」** —— "
-                       "别拿 a 去解释「下一批发几条 webhook」。\n"
-                       "★ 若出现**第三种**没识别的形状（不在下面这几个里）⇒ "
-                       "去核 `FOUND_LITS` / `_RE_FOUND` 是否该扩形状。\n"
-                       f"日志: {log_path}\n"
-                       "---- 别的 Found 形状（形状→行数）----\n" + detail + "\n"),
-                 key="reconcile-other-found",
-                 metrics={"fa": c.a, "fb": c.b, "f_other": n_other, "f_3line": n_3line})
+            LOG.warning("观测对账：%d 行「别的 Found 形状」（判据没识别，含三行式约 %d 行）\n"
+                        "   ★ a 的口径是「单行式（可回灌）已识别条数」，不是「搜出去总量」。\n"
+                        "---- 别的 Found 形状（形状→行数）----\n%s", n_other, n_3line, detail)
 
     # b − c 与无人认领都要真库；库不可达时**分开报**，别让一条坏了带走另一条。
     store = snap = None
@@ -2003,21 +1786,12 @@ def reconcile_watch(args) -> tuple[str, dict]:
                     new_more = (f"\n   …还有 {len(new) - 10} 条"
                                 if len(new) > 10 else "")
                     lines.append(head + "\n   ★ 与基线相比**有新增** —— 已告警。")
-                    emit("alert",
-                         f"农场里有 {len(new)} 条 searchee 谁都不归（**新增**）",
-                         body=("cross-seed 库里的 searchee，**三个包合起来都认不出**。\n"
-                               "它们不在任何包的 `dir_paths` 里，所以状态机看不见它们 ——\n"
-                               "既是「白搜」（cross-seed 照搜，额度照烧），\n"
-                               "也不会有任何片子因为它们的匹配而前进。\n\n"
-                               "★ 本判据只报**新增**：已经记进基线的那几条不再每天喊"
-                               f"（现存 {len(cur_paths)} 条，其中 {len(new)} 条是新的）。\n"
-                               "★ 常见形状：农场里混进了非媒体文件/目录"
-                               "（实测第一条是一个 `.xlsx` 清单）。\n\n"
-                               f"新增 {len(new)} 条：\n{new_list}{new_more}\n\n"
-                               f"全部 {len(cur_paths)} 条：\n{listing}{more}\n"),
-                         key="unclaimed-searchee",
-                         metrics={"unclaimed": len(cur_paths),
-                                  "unclaimed_new": len(new)})
+                    # ★ 通知写侧已砍掉（2026-10-05）：原先这里 `emit("alert", …,
+                    #   key="unclaimed-searchee")`。读数仍进日报（lines/metrics），
+                    #   只是不再投 spool 事件；下面补一行日志保证无人值守也能看见。
+                    LOG.warning("观测对账〔无人认领〕：新增 %d 条 searchee 谁都不归"
+                                "（现存 %d）：\n%s",
+                                len(new), len(cur_paths), new_list)
                 else:
                     gone = [p for p in prev_u if p not in cur_paths]
                     if gone:
@@ -2086,23 +1860,12 @@ def reconcile_watch(args) -> tuple[str, dict]:
                 lost = [x for x in prev_b["undriven"] if x not in cur["undriven"]]
                 if new:
                     note = "   ★ 与基线相比**有变化** —— 已告警。"
-                    emit(
-                        "alert",
-                        f"声明点对账：**从没被搜过**的包变多了（+{len(new)}）",
-                        body=("有**新登记的包**一次都没被搜到过（本判据只报**变化**，"
-                              "与基线一致的现状不再每天喊）。\n\n"
-                              f"  ★ 新增：{'、'.join(new)}\n\n"
-                              f"  从没被搜过的包（{len(undriven)}）："
-                              f"{'、'.join(undriven) or '(无)'}\n"
-                              "     ★ 白登记。它在 unclaimed / report / trend 上全是绿的，\n"
-                              "       但它的片子**一次都没被搜到过**。\n"
-                              "      排查：① 该包在 `movie` 表里有行吗（登记是否落实）？\n"
-                              "            ② 农场硬链接建上了吗（`build-farm.sh`）？\n"
-                              "            ③ `pack.root`/`local_root` 路径对吗？\n"
-                              "      ★ 现在**没有名单闸门**了：登记即被驱动，所以这不再是\n"
-                              "        「忘了排进名单」，而是「登记本身没落实」。\n"),
-                        key="packs-mismatch",
-                        metrics={"packs_undriven": len(undriven)})
+                    # ★ 通知写侧已砍掉（2026-10-05）：原先这里 `emit("alert", …,
+                    #   key="packs-mismatch")`。读数仍进日报（lines/metrics）。
+                    LOG.warning("声明点对账：**从没被搜过**的包变多了（+%d）：新增 %s；"
+                                "全部从没被搜过的包：%s",
+                                len(new), "、".join(new),
+                                "、".join(undriven) or "(无)")
                 elif lost:
                     note = ("   ★ 比基线**少** —— 不告警（修好了不必喊；"
                             "新基线已采纳，**再长回来会报**）：\n"
@@ -2222,7 +1985,8 @@ def pack_progress_watch(st) -> tuple[str, dict]:
             lines.append(f"  {name}：{r['seeding']} / {r['total']}"
                          f"（{pct}%，{cen['numerator']}/{cen['denom']}）  {fin}")
         # ★ 3N 个 kv，进 **metrics 这一个字段**（不是 TSV 的列，见 `#93`）。
-        #   ★ 键里的空格由 notify 侧规范化（`#95`），这里不预加工 —— 一处负责。
+        #   ★ key 里的空格由渲染侧规范化（原 `#95` 是 notify 的规矩；写侧已砍掉，
+        #     这里仍不预加工 —— 一处负责）。
         #   ★★ 前缀选 `packpct:` 而**不是** `pct:`，是为了让任何键都不可能
         #      拼出 `pack=`（摘要数批次靠它**整键相等**）。★ `packnum:` /
         #      `packden:` 字面含子串 `pack` 但**安全** —— 只因那条 awk 按 `=`
@@ -2241,14 +2005,15 @@ def pack_progress_watch(st) -> tuple[str, dict]:
         #   ★ 所以这里把**原因**也发射出去，让摘要能印在那一行**旁边** ——
         #     一句话，但**省掉第三次同样的问**。
         #   ★ 只在 `n/a` 时发射（正常包不写这个键 ⇒ 不占屏、不误导）。
-        #   ★ 值**不许含空格** —— `notify-spool.sh` 按空格切成 `键=值` 词元
-        #     （`kvget` 用 `split(s, a, " ")`）⇒ 带空格会把后面的词元切碎。
+        #   ★ 值**不许含空格** —— 原先这条约束是给 `notify-spool.sh` 的（它按空格
+        #     切成 `键=值`）。通知写侧已砍掉（2026-10-05），但**保留这条约束**：
+        #     metrics 是对外稳定口径，值里塞空格在任何渲染侧都是坑。
         #     所以这里发**下划线连写的标记**，由渲染侧翻成人话。
         if pct == "n/a":
             m[f"packwhy:{name}"] = "den0_no_searched_yet"
-        # ★ 原有的两个键**保留**：`notify-spool.sh` 会把整段 metrics 原样打进
-        #   摘要的批次明细 ⇒ 摘要里并排出现 seeding/total/packpct/packnum/packden，
-        #   读者能**自己验算**。没有任何程序解析它们（已 grep 证实）。
+        # ★ 原有的两个键**保留**：日报渲染侧会把整段 metrics 原样打进批次明细
+        #   ⇒ 摘要里并排出现 seeding/total/packpct/packnum/packden，读者能**自己验算**。
+        #   没有任何程序解析它们（已 grep 证实）。
         m[f"seeding:{name}"] = r["seeding"]
         m[f"total:{name}"] = r["total"]
 
@@ -2291,10 +2056,11 @@ def report_daily(args, *, force: bool = False, farm_note: str = "") -> bool:
     只识别 + 通知、不碰 qB）+ 观测对账（a−b / b−c〔全量口径〕/
     全场无人认领 / 声明点〔--packs〕）。
 
-    ★ 为什么必须自己记「今天发过没有」：notify 的**冷却只对 alert 生效**
-      （`batch`/`info` 走 `.get(kind, "info")` → level=info，`_cooled` 根本不查）。
-      也就是说同一个 batch 事件，**每一批都会真的写一个新文件进 spool**
-      —— 45 分钟一批就是一天 30 多条。日报不能靠 notify 去重，得自己记。
+    ★ 为什么必须自己记「今天发过没有」（**通知写侧已砍掉，此段留作历史**）：
+      原先 notify 的**冷却只对 alert 生效**（`batch`/`info` 走 `_cooled` 不查），
+      也就是同一个 batch 事件**每一批都会写一个新文件进 spool** —— 45 分钟一批
+      就是一天 30 多条。日报不能靠 notify 去重，得自己记。现在没有 spool 了，
+      但"每天恰好一次"这个**幂等约束**仍旧由 `_daily_set` 守着。
     """
     today = datetime.now().strftime("%Y-%m-%d")
     if not force and _daily_last() == today:
@@ -2340,10 +2106,10 @@ def report_daily(args, *, force: bool = False, farm_note: str = "") -> bool:
     iyuu_note, iyuu_metrics = iyuu_watch(args)
     parts.append(iyuu_note)
 
-    # 观测对账（a−b / b−c〔全量口径〕/ 全场无人认领 / 声明点〔--packs〕）。
-    # ★ 放在**日报里**而不是每批：日报是这套系统里唯一"每天恰好一次"的观测出口，
-    #   而 notify 只把 `metrics` 落进 TSV 流水（不记正文）—— 进日报的 metrics，
-    #   这些数才真的留得下来。同 iyuu_watch。
+    # 观测对账（a−b / b−c〔全量口径〕/ 全场无人认领 / 声明点〔pack 表〕）。
+    # ★ 放在**日报里**而不是每批：日报是这套系统里唯一"每天恰好一次"的观测出口 ——
+    #   进日报的 metrics，这些数才真的留得下来。（"notify 只记 metrics"那半句已随
+    #   通知写侧砍掉而作废，结论不变。）同 iyuu_watch。
     rec_note, rec_metrics = reconcile_watch(args)
     if rec_note:
         parts.append(rec_note)
@@ -2379,15 +2145,14 @@ def report_daily(args, *, force: bool = False, farm_note: str = "") -> bool:
     parts.append(lg_note)
 
     body = "\n\n".join(parts)
-    # ★ 数字要进 `metrics` 才落得进 TSV 流水（notify 只记 ts/kind/title/metrics，
-    #   **不记正文**）—— 详见 iyuu_watch 的说明。
-    if emit("batch", "每日台账", body=body, key="daily",
-            metrics={"day": today, **iyuu_metrics, **rec_metrics, **qb_metrics,
-                     **st_metrics, **fz_metrics, **lg_metrics, **pp_metrics}):
-        _daily_set(today)
-        LOG.info("已投递每日台账（额度 + 趋势）")
-        return True
-    return False
+    # ★ 通知写侧已砍掉（2026-10-05）：原先这里 `emit("batch", "每日台账", …,
+    #   key="daily")` 投进 spool 走每日摘要邮件。现在只有：
+    #   ① 日志（下面）；② `_daily_set(today)` 记"今天已报过"（与通知无关，是幂等开关）。
+    LOG.info("每日台账（额度 + 趋势，metrics=%s）：\n%s",
+             {"day": today, **iyuu_metrics, **rec_metrics, **qb_metrics,
+              **st_metrics, **fz_metrics, **lg_metrics, **pp_metrics}, body)
+    _daily_set(today)
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -2506,25 +2271,21 @@ def check_farm(*, force: bool = False, now: float | None = None,
     else:
         tail = "\n".join(out.splitlines()[-40:]) if out else "(无输出)"
         if rc == 1:
-            note = "农场巡检：**有漂移**（已发告警，处理与否由你定）"
-            title = "农场巡检：有漂移"
+            note = "农场巡检：**有漂移**（处理与否由你定）"
             head = ("农场（硬链接）与它的源对不上了。**只报告、不动手** —— "
                     "脚本从不自动删，`--prune` 跑不跑由你定。\n"
                     "· 补新建项：`sh build-farm.sh --apply`\n"
                     "· 删孤儿项：**确认源真的没了**再 `sh build-farm.sh --apply --prune`\n"
                     "★ 判「源没了」的依据就是同一份期望集，误判一次即不可逆，"
                     "所以这一步**故意**留给人。\n")
-            key = "farm-drift"
         else:
-            note = f"农场巡检：**跑不起来**（退出码 {rc}）—— 已发告警"
-            title = "农场巡检跑不起来"
+            note = f"农场巡检：**跑不起来**（退出码 {rc}）"
             head = ("这**不是**「没有漂移」，而是「根本没查成」 —— 退出码既不是 "
                     "0（无漂移）也不是 1（有漂移）。修好之前，农场有没有漂移"
                     "**无人知道**，别把它当成「一切正常」。\n")
-            key = "farm-check-broken"
-        LOG.warning("%s（退出码 %d）", note, rc)
-        emit("alert", title, body=head + "\n---- 输出末尾 ----\n" + tail,
-             key=key, metrics={"rc": rc})
+        # ★ 通知写侧已砍掉（2026-10-05）：原先这里 `emit("alert", title, …, key=…)`。
+        #   漂移/跑不起来的结论保留在**上面的日志**（LOG.warning）与日报 note 里。
+        LOG.warning("%s\n---- 输出末尾 ----\n%s", head.strip(), tail)
 
     _farm_check_write(note, now=now)
     return note
@@ -2721,61 +2482,35 @@ def run_round(pack: str, args, api_key: str) -> S.DriveStats | None:
         LOG.info("[%s] 回灌：搜过 %s / 匹配 %s / 新增做种 %d / 仍 SKIPPED %d",
                  s["pack"], rep.from_db + rep.from_log, rep.matched,
                  s["newly_seeding"], s["still_skipped"])
-    # 批次事件 → 只进每日摘要（不立刻发信）。好消息不该半夜吵醒人，
-    # 但也不能只躺在几万行日志里 —— 摘要就是它的去向。
-    # ★ key 不含时间戳，且 batch 不冷却（见 notify._cooled），所以每批都会进摘要；
-    #   摘要正是靠这些行统计「最近两次运行窗口的批次数」。
-    # ★★ `--pool` 下**每个包发一条**（`pack` = 真包名 ⇒ 日报按包聚合口径不变）。
+    # 批次汇总 → 只进日志。好消息不该半夜吵醒人，也不该只躺在几万行日志里 ——
+    # 现在（通知写侧已砍掉）它就在日志里，靠轮转保留。
+    # ★★ `--pool` 下**每个包打一条**（`pack` = 真包名 ⇒ 日志按包可读）。
+    #   ★ `ok`/`failed`/退避次数是**整批**的读数、**无法按包拆**（一轮 `DriveSession`
+    #     是混着发的）⇒ 只在**第一段**记它们，其余段记 0 并在正文里写明。
+    #     这比"按片数摊派"诚实 —— 摊派出来的数是编的，而 `A.12.1` 不许编读数。
+    # 批次汇总 —— 只进日志（原先 `emit("batch")` 走每日摘要邮件；通知写侧已砍掉
+    # 2026-10-05）。
+    # ★★ `--pool` 下**每个包打一条**（`pack` = 真包名 ⇒ 日志按包可读）。
     #   ★ `ok`/`failed`/退避次数是**整批**的读数、**无法按包拆**（一轮 `DriveSession`
     #     是混着发的）⇒ 只在**第一段**记它们，其余段记 0 并在正文里写明。
     #     这比"按片数摊派"诚实 —— 摊派出来的数是编的，而 `A.12.1` 不许编读数。
     for i, s in enumerate(segs):
         pk, rep = s["pack"], s["rep"]
         first = (i == 0)
-        emit("batch", f"{pk} 本批完成",
-             body=(f"包: {pk}\n"
-                   + ("" if len(segs) == 1 else
-                      f"★ 本批是**合池批**（{len(segs)} 个包）："
-                      f"{', '.join(x['pack'] for x in segs)}\n"
-                      f"  发送/退避是**整批**读数，只记在第一段；本段只记包内读数。\n"
-                      if first else "")
-                   + (f"发送: 成功 {stats.ok} / 失败 {stats.failed}\n" if first
-                      else "发送: 见本批第一段（合池批不按包拆）\n")
-                   + f"新增做种: {s['first_seeding']} 部（真增量）\n"
-                   + f"做种净额: {s['newly_seeding']} 部（当前 − 批次前）\n"
-                   + f"仍 SKIPPED: {s['still_skipped']}\n"
-                   + (f"退避: {stats.backoff_hits} 次"
-                      f"（等待 {stats.waited_sec / 60:.1f} 分钟）\n" if first
-                      else "")
-                   + f"回灌: 搜过 {rep.from_db + rep.from_log} / 匹配 {rep.matched}\n"),
-             key=f"batch:{pk}",
-             metrics={"pack": pk,
-                      "ok": stats.ok if first else 0,
-                      "failed": stats.failed if first else 0,
-                      "newly_seeding": s["newly_seeding"],
-                      "first_seeding": s["first_seeding"],
-                      "still_skipped": s["still_skipped"],
-                      "backoff_hits": stats.backoff_hits if first else 0,
-                      "pool_segs": len(segs),
-                      # ★★ 「该响没响」专配的读数：**本批**投出去几条通知
-                      #   （`reset_notify_count` 挂在 run_round 底部 ⇒ 与配额同尺度）。
-                      #   意义在于**批次自己也不发的时候**（通知链路断了），
-                      #   唯一带这个数的那行会一起消失 ⇒ 必须让它在**每一批**都出现。
-                      #   ★ `-1` = 通知未启用，与 `0`（启用了、本批一条没发）
-                      #     **必须分开**：合成一个数就又是「`n/a` = 0 = 没事」（`ERR-AI-03`）。
-                      "notify_delivered": notify_delivered()})
+        LOG.info("[%s] 本批完成：%s新增做种 %d 部 / 做种净额 %d 部 / 仍 SKIPPED %d / "
+                 "回灌 搜过 %d 匹配 %d%s",
+                 pk,
+                 "" if len(segs) == 1 else
+                 f"（合池批 {len(segs)} 包：{', '.join(x['pack'] for x in segs)}）",
+                 s["first_seeding"], s["newly_seeding"], s["still_skipped"],
+                 rep.from_db + rep.from_log, rep.matched,
+                 f" / 发送 成功 {stats.ok} 失败 {stats.failed}"
+                 f" / 退避 {stats.backoff_hits} 次" if first else "")
 
     # 每天一次的台账（额度 + 趋势）+「有站点此刻在退避」的即时告警。
-    # ★ 放在批次自己的 batch 事件**之后** —— 台账要反映刚回灌完的最新状态。
+    # ★ 放在批次汇总之**后** —— 台账要反映刚回灌完的最新状态。
     after_batch_reports(args)
 
-    # ★★★ 本批到此结束 ⇒ **回收告警配额**（2026-09-23）。
-    #   为什么必须在这一行、而不是 run_round 开头：上面 `emit("batch")` 与本行的
-    #   `after_batch_reports()`（台账 + 即时告警）都**属于本批**，归零要等它们发完；
-    #   若提到开头，重置后的第一条立刻被本批的 batch 吃掉，告警又轮空。
-    #   ★ 不回收的后果见 `reset_notify_count` 的注释：常驻模式下第 11 轮之后
-    #     连真告警都发不出去，而日志看着一切正常。
-    reset_notify_count()
     return stats
 
 
@@ -2809,7 +2544,7 @@ def write_state(d: dict) -> None:
       ★ 这个窗口**本来就在**，但 `#27` 把心跳改成「睡眠期也刷」之后，
       写频率从「跑批期」扩到「**全时**」⇒ 暴露面变大，所以现在补。
     ★ 同形先例有三处：`.daily-report` / `.reconcile` / `.farm-check`
-      （都 `tmp.write_text` → `os.replace`），以及 `notify.py` 的 spool。
+      （都 `tmp.write_text` → `os.replace`），以及（历史）`notify.py` 的 spool。
 
     ★★ 临时名**只能**是 `<原名>.tmp`，**不能**是 `.drive-loop.tmp.state` 之类。
       两个守卫对这个名字的判据**方向相反**（都实测跑过）：
@@ -3192,16 +2927,11 @@ def once_round(args, api_key: str, min_sleep: float) -> int:
             #   它自己有 20 小时间隔兜着，所以这里多调一次几乎总是空转（只读一个状态文件）。
             check_farm()
     except Exception:  # noqa: BLE001 —— 单批异常也要正确收尾状态
-        LOG.exception("[%s] 本批异常", pack)
+        # ★ 通知写侧已砍掉（2026-10-05）：原先这里 `emit("alert", …, key="batch-exception:…")`。
+        LOG.exception("[%s] 本批异常（常见：cross-seed 没起来 / API 连不上 / "
+                      "state.db 被占用 / NAS 掉线）；连续 3 批会升级为「连续批失败」",
+                      pack)
         failed, rc = True, 1
-        emit("alert", f"{pack} 本批异常",
-             body=(f"跑包 {pack} 时抛出异常（详见 drive-loop.log 的 traceback）。\n\n"
-                   "常见原因：\n"
-                   "  · cross-seed 没起来 / API 连不上\n"
-                   "  · state.db 被占用（另一批还在跑？）\n"
-                   "  · NAS 掉线（SMB 路径读不到）\n\n"
-                   "★ 连续异常会自动累计：到 3 批会再发一条「连续批失败」告警。\n"),
-             key=f"batch-exception:{pack}", metrics={"pack": pack})
     finally:
         # 连续失败计数跨进程持久化（无人值守下没人盯着，只能靠日志喊）
         # ★ 两个计数（真失败 / 良性提前收工）各存各的 —— 见 update_abort_streak
@@ -3272,20 +3002,9 @@ def main() -> int:
     ap.add_argument("--cadence-days", type=int, default=S.DEFAULT_CADENCE_DAYS)
     ap.add_argument("--cadence", default=None)
     ap.add_argument("--dry-run", action="store_true", help="只打印计划，不发请求")
-    # --- 通知（**已剥离** 2026-10-04，见文件头 import 处 + `重构方案.md` §11）---
-    # ★ 参数**保留**（不删）：① 与 `_notify.notifier_from_args` 的契约不变，万一
-    #   NAS 上还留着 `notify.py` 就照旧工作；② 删掉参数会破命令行兼容（脚本/文档
-    #   里都还带着 `--no-notify`）；③ 剥离的实际开关是「`import notify` 失败」
-    #   ⇒ 这几个参数现在是**无害的空转**。
-    ap.add_argument("--notify-spool", dest="notify_spool", default=None,
-                    help="通知事件文件写到哪（默认 NAS 上的 notify/spool；"
-                         "也可用环境变量 NOTIFY_SPOOL）。★ 通知模块已剥离，除非 NAS 上"
-                         "另放了 notify.py，本参数当前不生效")
-    ap.add_argument("--no-notify", action="store_true",
-                    help="本次不写任何通知事件（也可用环境变量 NOTIFY_DISABLE=1）")
-    ap.add_argument("--notify-cooldown-hours", dest="notify_cooldown_hours",
-                    type=float, default=12.0,
-                    help="同一个告警 key 多久内不重复发（默认 12 小时；0=不冷却，慎用）")
+    # ★ 通知参数（--notify-spool / --no-notify / --notify-cooldown-hours）已**整体删除**
+    #   （2026-10-05）：通知写侧已砍掉，这些参数没有任何调用方 —— 留着只会让
+    #   `--help` 和文档里出现"以为能发信"的误导。要发信 ⇒ 去独立通知项目。
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -3338,25 +3057,15 @@ def main() -> int:
     LOG.info("=== drive-loop 启动：池=pack 表全部登记包（无名单） indexers=%s limit=%d ===",
              args.indexers, args.limit)
 
-    # 通知：必须在 check_indexers / check_env_applied **之前**建好 ——
-    # 那两个自检本身就会发告警（这恰恰是最需要有人看到的两个）。
-    # ★ 通知模块已剥离 ⇒ 这里多半是空转（`_notify is None`），日志会打
-    #   "✗ 未启用（通知模块已剥离…）"。保留调用是为了万一 NAS 上仍有 notify.py。
-    init_notifier(args)
-    LOG.info("通知: %s", describe_notifier())
+    # ★ 通知写侧已整体砍掉（2026-10-05）：原先这里 `init_notifier(args)` +
+    #   `describe_notifier()`，以及随后那段「通知目录不存在」的兜底自检。
+    #   现在没有通知器，也没有可写的 spool —— 要发信去独立通知项目。
 
-    # ★ 已建好通知器 ⇒ 现在才谈得上投递。见 --daily-now 的定义处。
+    # --daily-now：把每日台账**就地打印一次**到日志（原先走邮件投递）。
     if getattr(args, "daily_now", False):
         sent = report_daily(args, force=True)
-        LOG.info("--daily-now：日报%s", "已投递" if sent else "未投递（被闸门挡下）")
+        LOG.info("--daily-now：日报%s", "已打印" if sent else "未打印")
         return 0 if sent else 4
-    if _NOTIFIER is not None and _NOTIFIER.enabled and not _NOTIFIER.dry_run:
-        if not _NOTIFIER.spool.parent.is_dir():
-            LOG.warning("  ⚠ 通知目录的上级不存在：%s", _NOTIFIER.spool.parent)
-            LOG.warning("    NAS 没挂上？事件会写失败（不影响跑批），先跑一次 "
-                        "notify-spool.sh 或在 NAS 上建好该目录。")
-            LOG.warning("    （★ 通知模块已剥离；除非 NAS 上另放了 notify.py，"
-                        "本条只是兜底提示。）")
 
     # 自检：cross-seed 真实搜索范围 vs --indexers（不一致会静默错记，务必先喊出来）
     check_indexers(args)
@@ -3494,13 +3203,10 @@ def main() -> int:
             with Heartbeat(phase=PHASE_RUNNING):
                 stats = run_round(pack, args, api_key)
         except Exception as e:  # noqa: BLE001 —— 循环不能因单批异常而死
-            LOG.exception("[%s] 本批异常（继续循环）", pack)
-            emit("alert", f"{pack} 本批异常",
-                 body=(f"跑池时抛出异常（详见 drive-loop.log 的 traceback）。\n\n"
-                       f"{type(e).__name__}: {e}\n\n"
-                       "常见原因：cross-seed 没起来 / state.db 被占用 / NAS 掉线。\n"
-                       "★ 连续异常会自动累计：到 3 批会再发一条「连续批失败」告警。\n"),
-                 key=f"batch-exception:{pack}", metrics={"pack": pack})
+            # ★ 通知写侧已砍掉（2026-10-05）：原先这里 `emit("alert", …, key="batch-exception:…")`。
+            LOG.exception("[%s] 本批异常（继续循环）：%s: %s —— 常见：cross-seed 没起来 / "
+                          "state.db 被占用 / NAS 掉线；连续 3 批会升级为「连续批失败」",
+                          pack, type(e).__name__, e)
             consec = update_abort_streak(consec, None, failed=True)
             if args.once:
                 return 1

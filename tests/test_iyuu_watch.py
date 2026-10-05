@@ -201,17 +201,35 @@ class _Store:
 
 
 def _run_daily(stub_tagged):
-    """跑一遍 report_daily，返回它交给 emit 的 (title, metrics, body)。"""
+    """跑一遍 report_daily，返回它写进日志的正文（原先是交给 emit 的 title/metrics/body）。
+
+    ★★ 2026-10-05：通知写侧已砍 ⇒ `report_daily` 不再 `emit()`，改 `LOG.info(正文)`。
+    判据语义不变（"iyuu 读数真的进了日报"），取证点从 `emit` 的入参换成日志正文。
+    """
     sent: dict = {}
 
-    def _fake_emit(kind, title, body="", *, key=None, metrics=None):
-        sent.update(kind=kind, title=title, body=body, metrics=metrics or {})
-        return True
+    class _FakeLog:
+        disabled = False
+
+        def info(self, msg, *a, **k):
+            text = (msg % a) if a else msg
+            # 日报那条是唯一带「每日台账」的；其余 info（对账等）不覆盖它
+            if "每日台账" in text:
+                sent["body"] = text
+                sent["title"] = "每日台账"
+
+        def warning(self, *a, **k):
+            pass
+
+        def debug(self, *a, **k):
+            pass
+
+        def exception(self, *a, **k):
+            pass
 
     D.S.StateStore = _Store
     D.S.qbit_tagged = stub_tagged
-    D.emit = _fake_emit
-    D.LOG.disabled = True
+    D.LOG = _FakeLog()
     args = argparse.Namespace(db_path=None, db="x.db", qbit_url="http://h:3060")
     with tempfile.TemporaryDirectory(prefix="iyuu-probe-") as td:
         # ★ 必须改向 —— 否则 `_daily_set` 会往**仓库**里写 .daily-report.state
@@ -227,16 +245,16 @@ def _run_daily(stub_tagged):
 
 
 sent = _run_daily(lambda url, tag, **kw: [{"hash": "x"}] * 137)
-ck("★ iyuu 进了 metrics（这是 TSV 唯一的入口）", sent["metrics"].get("iyuu") == 137,
-   repr(sent["metrics"]))
-ck("day 没被挤掉", "day" in sent["metrics"], repr(sent["metrics"]))
-ck("正文里也有（给人看）", "IYUU 辅种条数" in sent["body"], sent["body"][-200:])
-ck("kind 仍是 batch（不是 alert —— 只记账不告警）", sent["kind"] == "batch", sent["kind"])
+ck("★ iyuu 读数进了 metrics（日报日志那条 `metrics=%s` 里）",
+   "iyuu=137" not in sent["body"] and "'iyuu': 137" in sent["body"],
+   sent["body"][:400])
+ck("day 没被挤掉", "'day':" in sent["body"], sent["body"][:400])
+ck("正文里也有（给人看）", "IYUU 辅种条数：**137**" in sent["body"], sent["body"][-300:])
 
 sent2 = _run_daily(_boom_tagged)
-ck("★ qB 挂了，日报照样发得出去", sent2.get("title") == "每日台账", repr(sent2.get("title")))
-ck("★ 挂掉时 metrics 也留痕（n/a），不是缺字段", sent2["metrics"].get("iyuu") == "n/a",
-   repr(sent2["metrics"]))
+ck("★ qB 挂了，日报照样写得出来", "每日台账" in sent2["body"], sent2["body"][:200])
+ck("★ 挂掉时读数也留痕（n/a），不是缺字段", "'iyuu': 'n/a'" in sent2["body"],
+   sent2["body"][:400])
 
 print(f"\n{'=' * 60}")
 print(f"断言 {_ok + _bad} 条：{_ok} 过 / {_bad} 失败")
