@@ -685,6 +685,34 @@ note6, m6 = D.reconcile_watch(argparse.Namespace(log=[LOG_1], db=None, db_path=N
 ck("★★ 对照：只有单行式 ⇒ **不发**其它形状的告警（判据非恒真）",
    [e[3] for e in events if e[0] == "alert"], [])
 
+print("== ⑥ 已知形状白名单：`[inject] … torrent file(s) to inject` 静默（不进 other_found） ==")
+# ★ 2026-10-06 用户拍板：`[inject] Found N torrent file(s) to inject in /config/cross-seeds`
+#   §32.16 标「已排除，不算」；实测 256 行/天 ⇒ 报警 = 固定噪声。⇒ 列白名单、静默。
+#   这**不是**把它并进 a（那样 a−b 会恒红），是**连 other_found 都不进**。
+LOG_INJ = "\n".join([
+    '2026-10-04 00:02:23.032 info: [inject] Found 2 torrent file(s) to inject in /config/cross-seeds',
+    '2026-10-04 00:12:00.000 info: [inject] Found 3 torrent file(s) to inject in /config/cross-seeds',
+    # 一条真正的靶心（单行式）—— 保证 controls_ok 且 a 不为空
+    '2026-10-04 00:12:30.000 info: [webhook] Found M [abcd1234...]'
+    ' on HDFans by MATCH from dataDir (/v/farm/M) - MATCH',
+])
+r6 = count_found_lines(LOG_INJ)
+ck("★ inject 行**不进** other_found（静默）", sum(r6.other_found.values()), 0)
+ck("★ inject 行也**不进** a（白名单 ≠ 并入靶心）", r6.a, 1)
+ck("★ a − b 仍为 0", r6.delta, 0)
+# 端到端：只有 inject + 单行式 ⇒ **不发** reconcile-other-found（白名单生效应体现在此处）。
+LOG_INJ_F = os.path.join(tempfile.mkdtemp(), "info-inject.log")
+pathlib.Path(LOG_INJ_F).write_text(LOG_INJ, encoding="utf-8")
+events.clear()
+note7, m7 = D.reconcile_watch(argparse.Namespace(log=[LOG_INJ_F], db=None, db_path=None))
+ck("★★ 端到端：只有 inject 形状 ⇒ **不发** other-found 告警（白名单真生效）",
+   [e[3] for e in events if e[0] == "alert"], [])
+# 阳性对照：**保留**三行式报警 —— 白名单只排 inject，没顺手排掉三行式。
+LOG_INJ_3L = LOG_INJ + "\n" + '2026-10-04 00:13:00.000 info: [webhook] Found 1 torrents for {'
+r7 = count_found_lines(LOG_INJ_3L)
+ck("★ 对照：三行式**仍**进 other_found（白名单只排 inject）",
+   any("torrents for" in k for k in r7.other_found), True)
+
 print()
 if fails:
     print(f"★ {len(fails)} 条失败：")

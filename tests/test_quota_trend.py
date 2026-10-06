@@ -303,6 +303,7 @@ def _install_log():
 
 def _warn_key(text):
     for marker, k in (("农场巡检", "farm-drift"), ("没查成", "farm-check-broken"),
+                      ("参数解析错", "farm-check-broken"),
                       ("正在退避", "indexer-blocked"), ("退避中", "indexer-blocked"),
                       ("额度", "quota"), ("趋势", "trend")):
         if marker in text:
@@ -405,7 +406,16 @@ alerts.clear()
 _runner.rc, _runner.out = 2, "未知参数: --verify"
 dl.check_farm(force=True, now=T0, runner=_runner)
 ck("  退出码 2（不是 0 也不是 1）→ 也告警", len(alerts), 1)
-ck("  ★ 文案点明「不是没漂移，是没查成」", "不是" in _alert_text(), True)
+ck("  ★ 文案点明「2 = 参数解析错」（不是「没查成」/「农场坏了」）",
+   "参数解析错" in _alert_text(), True)
+ck("  ★ 码 2 别指错方向：正文说「先核命令，别去动农场」",
+   "先核命令" in _alert_text(), True)
+
+alerts.clear()
+_runner.rc, _runner.out = 3, "未知退出码"
+dl.check_farm(force=True, now=T0, runner=_runner)
+ck("  其它非 0/1/2 → 也算没查成", len(alerts), 1)
+ck("  ★ 文案点明「根本没查成」", "根本没查成" in _alert_text(), True)
 
 alerts.clear()
 dl.first_existing = lambda rel: None

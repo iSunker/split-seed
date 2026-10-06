@@ -2123,6 +2123,19 @@ FOUND_LITS = (
 )
 L1_LABEL = FOUND_LITS[0][0]
 _HEX8 = re.compile(r"\[[0-9a-f]{8}\.\.\.\]")
+
+#: ★★★ 2026-10-06（用户拍板）：`] Found ` 行里**已知、且刻意不算**的其它形状。
+#  命中这些子串 ⇒ `count_found_lines` **既不进 a、也不进 other_found**（= 静默按已知处理），
+#  于是不会触发 `reconcile-other-found` 那条告警。
+#  · `torrent file(s) to inject`：cross-seed 注入阶段**开头**扫目录的那句进度日志
+#    （`[inject] Found N torrent file(s) to inject in /config/cross-seeds`）。
+#    §32.16 标「已排除，不算」；实测 256 行/天 ⇒ 报警 = 固定噪声。
+#  ★ **别把三行式 `Found N torrents for {` 加进来** —— 它保留报警（量小、且"新形状"值得看一眼）。
+#  ★ 加白名单**要带判据**：只在"确认它不是我们要回灌的信息"时才加（这里正是：它无站名、无 hash）。
+KNOWN_OTHER_FOUND_LITS = (
+    "torrent file(s) to inject",
+)
+
 _LOG_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+ \w+: (?P<msg>.*)$")
 
 
@@ -2183,9 +2196,20 @@ def count_found_lines(text: str) -> FoundLineCount:
             elif len(r.unparsed) < 8:
                 r.unparsed.append(raw)
         else:
-            head = raw.split("] Found ", 1)[1][:60] if "] Found " in raw else raw[:60]
-            k = re.sub(r"\d+", "N", head.split("{")[0].strip())[:48]
-            r.other_found[k] = r.other_found.get(k, 0) + 1
+            # ★★★ 2026-10-06 拍板：**已知形状白名单** —— 命中即静默、**不进 other_found**。
+            #   起因：用户拿 10-04 邮件来核，`other_found` 报的两条里有一条是
+            #   `[inject] Found N torrent file(s) to inject in /config/cross-seed`
+            #   —— §32.16 早已把它标为「**已排除，不算**」（它是注入阶段**开头**扫目录的
+            #   一句普通进度日志，不是"搜到了哪个站"，与我们回灌无关）。
+            #   实测量级：10-04 单日 **256 行**。⇒ 若继续报警，就是**每天一封固定噪声**
+            #   （而本仓纪律：假警报会把真警报一起过滤掉）。
+            #   ⇒ 处置：把它列为**已知**（不报警、不计入 other_found）。
+            #   ★ **只排这一种** —— 三行式 `Found N torrents for {` **保留报警**
+            #     （它虽也不进 a，但量小，且"又出现没识别的形状"仍值得人看一眼）。
+            if not any(lit in raw for lit in KNOWN_OTHER_FOUND_LITS):
+                head = raw.split("] Found ", 1)[1][:60] if "] Found " in raw else raw[:60]
+                k = re.sub(r"\d+", "N", head.split("{")[0].strip())[:48]
+                r.other_found[k] = r.other_found.get(k, 0) + 1
     return r
 
 
