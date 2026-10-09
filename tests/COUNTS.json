@@ -1,10 +1,10 @@
 {
   "by_file": {
-    "test_backoff.py": 60,
+    "test_backoff.py": 83,
     "test_build_farm_nested.py": 34,
     "test_can_publish.py": 47,
     "test_check_indexers.py": 38,
-    "test_datadirs_names.py": 26,
+    "test_datadirs_names.py": 25,
     "test_drift_junk.py": 20,
     "test_drift_lists.py": 14,
     "test_drive_loop_service.py": 139,
@@ -29,9 +29,9 @@
     "test_prowlarr_indexers.py": 16,
     "test_qb_999_band.py": 51,
     "test_qb_census_props.py": 23,
-    "test_quota_trend.py": 91,
+    "test_quota_trend.py": 94,
     "test_readme_counts.py": 13,
-    "test_reconcile.py": 126,
+    "test_reconcile.py": 131,
     "test_remove_indexer.py": 8,
     "test_reseed_freeze.py": 79,
     "test_roots_from_env.py": 25,
@@ -44,7 +44,7 @@
     "test_sync_empty_sets.py": 31,
     "test_torznab_probe.py": 102,
     "test_watch_containers.py": 60,
-    "test_watch_containers_loop.py": 0
+    "test_watch_containers_loop.py": 21
   },
   "notes": {
     "test_backoff.py": "退避检测 —— **55 秒的短窗口发生在批次中途也必须记一笔**（复刻 2026-09-12 现场）；残值不误记、禁用的索引器不挡路。★ 另钉 **`aborted_kind` 的两个计数各走各的**（2026-09-13）：「站点退避超时」是**良性**、**一点失败都不涨**（复刻 09-13 那条 `failed=0` 与「连续 3 批失败」同批的 TSV）、真故障的 key 是 `consec-abort` / 良性是 `consec-backoff`、**两者互不清零**（写成\"互相清零\"会让交替出现的退避把真故障永远压在 3 以下 ⇒ 告警等于没有）、只有**正常跑完**才一起清零、认不出种类时**按真失败算**（宁可吵不可静默）、混着出现时标题补「共 N 批没跑成」。<br>★★ **退避时刻必须带日期**（#114，新增 ⑬，2026-09-16）：`解禁` / `等到` 一律 `%m-%d %H:%M`（或带秒）—— 复刻 2026-09-15 13:39 那条「解禁 **01:31:11**」（看着像**当天**凌晨，**其实是次日**；与 Prowlarr 侧 `disabledTill 09-16 13:32` 差 12 小时，审阅时被当成\"其中一个抄错了\"）。★ 判据**成对**：既要断言带日期，也要断言**旧写法判不出来**（否则那条判据恒真）；★ 还要先断言「**真的走到了那条 warn**」—— 第一版三条全踩空（20 小时的退避走的是 abort 那条路，它本来**就**带日期 ⇒ 断言落在空集上，\"任何正则都成立\"），**这是本文件第二次栽在\"假测试\"上**。<br>★★ **「已过去的残值」不许说成「解禁」**（#116，新增 ⑭，2026-09-17）：现场是 09-16 10:41:06 那两条 `…被限流（RATE_LIMITED），解禁 10:21:19` / `解禁 09:22:06` —— 两个「解禁」**都早于**触发时刻，与 `cross-seed.db` 的 `retry_after` **逐秒相同** ⇒ **数没印错，是「解禁」这个词印错了**：它不是「将要解禁」，而是「上次那个窗口**已经在 … 结束了**」。★ 代价（真实发生）：按「将要解禁」读 ⇒ 得到\"时间倒流\" ⇒ 把一条**陈旧残值**读成「今天上午又被限了一次」，而那天**根本没有**新限流（09-16 全天 `要等到` = 0）。★ 与 ⑬ 的关系：**⑬ 管格式（带日期），⑭ 管语义（过去 ≠ 将来）**，两条不重叠 —— 旧写法（带日期、但说\"解禁\"）在 ⑬ 是**绿**的，在 ⑭ 必须**红**（已变异验过）",
@@ -94,11 +94,12 @@
     "test_watch_containers_loop.py": "`scripts/diag/watch-containers-loop.sh`（常驻循环入口，2026-09-29 加）—— 它跑在 `reseed-watcher` 容器里，而那个容器是 `restart: always` ⇒ 本文件的**全部价值**是「**它一直在**」。钉三条：① 单轮 `rc≠0`（1=拉不起来 / 2=查不了）**绝不终止循环** —— 否则一次故障会被 docker 的 `always` **放大成重启风暴**，且现场被冲掉；② **每轮打带时间戳的心跳**（轮次号+时刻）—— 这是唯一能区分「在跑」与「循环卡死的假在跑」的东西（`always` 不管卡死；这也正是「选项 (C)」的洞）；③ `--compose` **只传一次**（实测 bug：循环自己拼一个 + 调用方透传一个 ⇒ `watch-containers.sh` 最后一个赢 ⇒ 默认值被**静默覆盖**，而报告头打的是覆盖后的值 ⇒ 看着正常）。变异（加回「按 rc 退出」）⇒ 恰好 5 条红。<br>★ **2026-10-01 增（④b 段）**：循环现在也透传 `--compose-qb`（项目 B 目录）。★★ 与 ④ 段**完全同族**的坑：循环自己拼一个 `--compose-qb`，调用方若再透传一个 ⇒ 命令行上**两个** ⇒ `watch-containers.sh` \"最后一个赢\" ⇒ **默认值静默覆盖调用方的**（报告头看着一切正常）。判据成对：① 正例 `COMPOSE_DIR_QB=` 必须是**调用方传的**（不含 `/volume2/`）；② **阴性对照** —— 把默认 NAS 路径喂进同一判据必须**判得红**（防恒真）。"
   },
   "scripts": 45,
-  "total": 1706,
-  "failures": 1,
+  "total": 1757,
+  "failures": 2,
   "failed_files": [
-    "test_watch_containers_loop.py"
+    "test_datadirs_names.py",
+    "test_due_indexer_name.py"
   ],
-  "measured_at": "2026-10-05",
+  "measured_at": "2026-10-09",
   "command": "python tests/gen-counts.py"
 }

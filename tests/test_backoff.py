@@ -469,6 +469,82 @@ ck("★★ 但旧文案**通不过 ⑭**（它把过去说成了将来）",
    ("窗口已于" in _old_good_date), False)
 
 print()
+
+# =========================================================================== #
+# ⑮ ★★ 400 是**单条**数据问题：跳过它、继续发；401/403 才是真故障（#23 修法 B）
+# =========================================================================== #
+#   现场（2026-10-10）：某个登记的「包」压根没落盘 ⇒ 它的子目录**逐条** 400
+#   （cross-seed 的 /api/webhook schema 是 `path.refine(existsSync)`）。
+#   旧写法把 400 和 401/403 一起 `break` ⇒ **一条坏数据废掉整池**：
+#     `[1/12] !! 400  MEN_WHO_BUILT_AMER_D1` → `成功 0 / 失败 1` → 提前中止，
+#   其余 11 条（别的包、盘上好好的）一条都没发。
+#   ★ 三格一起钉：400 跳过后**别的还发**、401/403 仍中止、纯 400 的批次
+#     `aborted` 必须**仍是 None**（否则上游 next_sleep 白罚 3 小时、
+#     update_abort_streak 白记一笔「批失败」）。
+print("== ⑮ ★★ 400 跳过不中止；401/403 仍中止 ==")
+
+
+def run_codes(codes, *, on_event=None):
+    """按条目指定返回码跑一轮。返回 (stats, session)。"""
+    clock = Clock()
+    seq = list(codes)
+    calls = [0]
+    orig = S.post_webhook
+
+    def fake_post(pth, **kwargs):
+        c = seq[calls[0]] if calls[0] < len(seq) else 204
+        calls[0] += 1
+        return c
+
+    S.post_webhook = fake_post
+    try:
+        sess = S.DriveSession(url="http://x", api_key="k", crossseed_db=None,
+                              interval=0.0, check_every=10, check_secs=0.0,
+                              pause_on_backoff=False,
+                              sleep=clock.sleep, now=clock.now,
+                              monotonic=clock.monotonic, on_event=on_event)
+        return sess.run([f"/p/{i}" for i in range(len(seq))]), sess
+    finally:
+        S.post_webhook = orig
+
+
+# ⑮-a：第 2 条 400（坏数据），其余 2xx ⇒ 跳过后**必须继续**，3 条都发出去
+_ev15 = []
+st15, _ = run_codes([204, 400, 204], on_event=lambda k, *r: _ev15.append((k, r)))
+ck("★ 400 不中止（aborted 仍为 None）", st15.aborted, None)
+ck("★ 400 不设 aborted_kind", st15.aborted_kind, None)
+ck("★ 3 条全发出去了（400 那条之后没停）", st15.sent, 3)
+ck("★ 成功 2 / 失败 1", (st15.ok, st15.failed), (2, 1))
+ck("★ 400 单独记一笔", st15.skipped_400, 1)
+_w15 = [r[0] for k, r in _ev15 if k == "warn"]
+ck("★ 跳过是**可见**的（一条 warn，带 400 字样）",
+   any("400" in m for m in _w15), True)
+ck("★ 400 走 warn，**不走** abort", [k for k, r in _ev15 if k == "abort"], [])
+ck("★ render() 出现「跳过」读数", "跳过" in st15.render(), True)
+
+# ⑮-b：401 / 403 保持旧行为 —— 设 aborted + aborted_kind + break（第 3 条不发）
+for _code in (401, 403):
+    st15b, _ = run_codes([204, _code, 204])
+    ck(f"★ {_code} 仍中止", bool(st15b.aborted), True)
+    ck(f"★ {_code} 分类仍是 webhook-auth", st15b.aborted_kind, "webhook-auth")
+    ck(f"★ {_code} 当场停手（第 3 条没发）", st15b.sent, 2)
+    ck(f"★ {_code} aborted 文案带返回码", str(_code) in (st15b.aborted or ""), True)
+
+# ⑮-c：整批都是 400 ⇒ **不许**算中止（这是本节的根因格）
+_ev15c = []
+st15c, _ = run_codes([400, 400, 400], on_event=lambda k, *r: _ev15c.append((k, r)))
+ck("★★ 纯 400 批次：aborted 仍为 None", st15c.aborted, None)
+ck("★★ 纯 400 批次：aborted_kind 仍为 None", st15c.aborted_kind, None)
+ck("★ 全发了（各自跳过，没 break）", st15c.sent, 3)
+ck("★ 失败 3、ok 0", (st15c.ok, st15c.failed), (0, 3))
+ck("★ 跳过数 3", st15c.skipped_400, 3)
+#   ★★ 下游后果钉死：纯 400 批次喂给 next_sleep 必须**不是** ABORT_SLEEP
+_sec15, _why15 = dl.next_sleep(st15c)
+ck("★★ 纯 400 → 不按「提前中止」吃 3 小时", _sec15 != dl.ABORT_SLEEP, True)
+ck("★ 且 update_abort_streak 不记真失败（两个计数都不涨）",
+   dl.update_abort_streak((0, 0), st15c), (0, 0))
+
+print()
 if fails:
     print(f"!!! {len(fails)} 个失败")
     for f in fails:

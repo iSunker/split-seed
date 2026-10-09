@@ -2908,6 +2908,11 @@ class DriveStats:
     sent: int = 0
     ok: int = 0
     failed: int = 0
+    #: ★★ 400 = 「这一条的 path 不在盘上」（cross-seed schema `path.refine(existsSync)`），
+    #:   **单条数据问题**、不是鉴权坏（401/403 才是）。它**同时**计入 `failed`
+    #:   （确实没发出去），但单独留一个数：`failed` 里 5xx/超时与"数据脏了"混在一起，
+    #:   看数的人分不出「要不要去清那个包」。这一格**不进** `aborted`/`aborted_kind`。
+    skipped_400: int = 0
     waited_sec: float = 0.0
     backoff_hits: int = 0
     aborted: str | None = None
@@ -2937,6 +2942,8 @@ class DriveStats:
             f"计划 {self.total} 条，发出 {self.sent} 条（成功 {self.ok} / 失败 {self.failed}）",
             f"因退避等待 {self.waited_sec / 60:.1f} 分钟，命中退避 {self.backoff_hits} 次",
         ]
+        if self.skipped_400:
+            lines.append(f"  ↳ 其中 {self.skipped_400} 条因 path 不在盘上被跳过（400）")
         if self.aborted:
             lines.append(f"⚠ 提前中止：{self.aborted}")
         if self.resync:
@@ -3186,7 +3193,25 @@ class DriveSession:
                 self.stats.failed += 1
             self._on_event("sent", pth, code, i, self.stats.total)
 
-            if code in (400, 401, 403):
+            # ★★ 400 与 401/403 是**两件事**，不能同处（2026-10-10 修，#23 修法 B）：
+            #   · 400 —— cross-seed 的 `/api/webhook` schema 是 `path.refine(existsSync)`，
+            #     400 的意思是「**这一条**的 path 不在盘上」（实测：某个登记的包压根没落盘，
+            #     它的子目录**逐条** 400）。这是**单条**的数据问题，不是我们错了。
+            #     旧写法把它跟 401/403 一样 `break` ⇒ **一条坏数据废掉整池**：实测日志
+            #       `[1/12] !! 400  MEN_WHO_BUILT_AMER_D1` → `成功 0 / 失败 1` → 提前中止，
+            #     其余 11 条（别的包、盘上好好的）**一条没发**。代价被一条数据放大成一批。
+            #   · 401/403 —— 真·鉴权坏了（key 不对 / 路径不对）：**每一条都会**同样失败，
+            #     继续发只是白白刷屏 ⇒ 保持旧行为：设 aborted + break。
+            #   ★ 400 这一支**不许**碰 `aborted` / `aborted_kind`：下游 `next_sleep()`
+            #     见 `aborted` 就吃满 3 小时、`update_abort_streak()` 会记一笔「批失败」
+            #     —— 一条没落盘的条目**不该**换来这两种后果。它只是一个 failed
+            #     （与别的非 2xx 同档，见上面 `else: self.stats.failed += 1`）。
+            if code == 400:
+                self.stats.skipped_400 += 1
+                self._on_event("warn", f"webhook 400：{Path(pth).name} 不在盘上"
+                                       f"（cross-seed 拒收不存在 path），跳过本条，继续")
+                # ★ 不 break、不设 aborted —— 继续下一条
+            elif code in (401, 403):
                 self.stats.aborted_kind = "webhook-auth"
                 self.stats.aborted = f"webhook 返回 {code}（鉴权/路径问题），已停"
                 self._on_event("abort", self.stats.aborted)
