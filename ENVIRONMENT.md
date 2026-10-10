@@ -1,7 +1,7 @@
 ---
 doc: ENVIRONMENT.md
 title: 环境前提与环境坑手册
-project: reseed-toolkit（大包拆包 · 单种保种工具链）
+project: split-seed（大包拆包 · 单种保种工具链）
 generated: 2026-09-13
 purpose: >
   给「新会话的 AI」和「接手的人」一份可直接读的环境层事实与归因。

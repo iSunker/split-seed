@@ -1,5 +1,5 @@
 # =====================================================================
-# 大包拆包 · 单种保种  —— 服务栈
+# split-seed（大包拆包 · 单种保种）—— 服务栈
 #   prowlarr        : 把你的 PT 站变成 Torznab，供 cross-seed 搜索
 #   flaresolverr    : (可选) 过 Cloudflare，中文 NexusPHP 站常需要
 #   cross-seed      : 按内容匹配单种 → 在 linkDir 建硬链接 → 注入 :3060
