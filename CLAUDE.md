@@ -108,3 +108,89 @@ for t in tests/test_*.py; do python "$t" >/dev/null 2>&1 || echo "✗ $t"; done 
 - **`:3060` 是与别人共用的 qB** ⇒ 凡读它**必须按 `category` 收窄**（我们的是 `reseed-singles`）。
 - **文档审计只扫仓库根的 `*.md`** ⇒ `tools/`、`tests/` 下的 md（含 `INDEX-USAGE.md` 自己）**没人查**。
 - **`Task#N` 不是文档锚点** —— 只在当次会话的棋盘里有意义，**会话结束就找不到**。
+
+---
+
+## 5. 结构规约（**整理仓库时按这套做**）
+
+> ★ **本节是结构/目录/git/部署规则的唯一出处**（2026-10-10 起）。
+> ★ **历史**：原独立文件 `.claude/rules` 因**缺 `.md`、又不是目录**，C​laude Code 的加载约定
+> （`<repo>/.claude/rules/**/*.md`）**永远读不到它** ⇒ 规则对 agent 空转。现**并入本文件**
+> （`CLAUDE.md` 是新会话必然自动加载的唯一入口）+ 删掉 `.claude/rules`。
+> ★ 与 `A.11`「一事一处」一致：**结构规则只在这一处**，别处只留指针。
+
+### 5.1 目录约定
+
+- **容器相关的一切进 `data/`**（`data/cross-seed` / `data/hlink` / `data/orchestrator` /
+  `data/drive-loop` / `data/prowlarr` / `data/scripts/diag`）。判据：**容器运行时读的** 或 **compose 引用的**。
+- **`data/` 平级只允许一个 compose**，文件名 `compose.yaml`（本机与生产同名）。
+- **本机专属**（`tests/`、`tools/`、根下 `scripts/`〔diag 工具集〕、`summary/`、各 `*.md`）
+  **不上 NAS、不入镜像**。★ 注意与 `data/scripts/diag/` 区分：那个是 **watcher 容器读的**，要上 NAS；
+  根下 `scripts/` 是本机资产（其中 3 个文件同时进部署集，见 `DEPLOY_MANIFEST`）。
+
+### 5.2 「compose 目录」只有三条来源，必须一致
+
+| # | 来源 | 位置 | 类型 |
+|---|---|---|---|
+| A | `$0` 反推 / `dirname` | `data/drive-loop/run.sh` | 动态 |
+| B | `CROSSSEED_DIRS`（读 `COMPOSE_DIR` 环境变量） | `data/drive-loop/scripts/drive-loop.py` | **镜像里** |
+| C | shell `${COMPOSE_DIR:-<默认>}` | `build-farm.sh`、`scripts/diag/*` | 静态默认 |
+
+- ★★ **B 是唯一会"静默坏"的**：它经 `first_existing()` 解析 4 样东西
+  （`build-farm.sh` / `cross-seed.db` / `info.current.log` / `.env`），路径错时**全部降级成 `LOG.warning`**，
+  不退非零、日报数字错（`SUMMARY §26.15` 的 `packpct=0` 形状）。
+- ★ 新根 = `/volume2/docker_ssd/reseed`。**任何 shell 默认值不许硬编码一个同样出现在镜像里的路径**。
+
+### 5.3 代码定位规则（最重的一条）
+
+- **容器读的代码要么在镜像里、要么挂载 1:1 同路径。** 本仓已选**代码全在镜像里**：
+  `data/orchestrator/*`、`data/drive-loop/scripts/*`、`data/drive-loop/run-resident.sh` 全部由 Dockerfile `COPY` 进镜像（`/app/…`）。
+- **改这些代码 ⇒ 重建镜像 + push + NAS pull**，受管文件集（`DEPLOY_MANIFEST`）**碰不到它们**。
+  ★ 病根见 `SUMMARY §26.15`（一份代码三个副本、生产读到旧的那份、`packpct` 全 0，**不报错**）。
+- 镜像内布局**固定**：`/app/scripts/` + `/app/orchestrator/`（`drive-loop.py` 靠 `sys.path` 找 orchestrator）。
+- 运行态（`.state` / 日志 / `state.db`）走**挂载卷** `/state`（环境变量 `DRIVE_STATE_DIR`），**不在镜像层**。
+
+### 5.4 git
+
+- 远程 `origin` **已删除** —— **只在本机提交，绝不推远程**。
+- `.env` 已 gitignore，**绝不进 git、也绝不进镜像**（`.dockerignore` 用 `.env*` 通配兜）。仓库**是公开的**。
+- 密钥/口令**只从 `.env` 读**，绝不写进命令行、绝不回显（见 `scan-secrets.py`）。
+
+### 5.5 部署模型（push/pull）
+
+- **代码**走 Docker Hub 镜像：`isunker/reseed-toolkit-drive-loop:<短sha>` /
+  `isunker/reseed-toolkit-orchestrator:<短sha>`（tag = git 短 sha）。本机 `docker build` → `push` → NAS `pull`。
+  ★ NAS 上**不许 build**（那边没有源码树）。
+  ★ **改 compose 里的 tag 前先确认镜像已 push**（否则 NAS 拉不到）——且**只改真要推的那个服务**。
+- **compose / 配置**走 **SSH 直推**（NAS 无 SFTP ⇒ `ssh 'cat > <path>' < <localfile>`，逐文件原子替换 + 本地备份 + 可达性闸门）。
+  受管文件集写在 `scripts/diag/check-deploy-drift.py` 的常量 `DEPLOY_MANIFEST`；`[A] 代码 ⇒ 走镜像`。
+- 改代码的正确流程：`docker build` → `push` → NAS `docker compose pull <服务> && up -d --force-recreate <服务>`。
+
+### 5.6 废旧件清理（**整理时用这条判据**）
+
+**可删项三类**：① 空/孤儿目录（零引用、哨兵看不见的残留）；② 含凭据的备份（`.env.bak-*` 等）；
+③ 已死机制的残留（如 `deploy.sh` 时代产物）。
+
+**判据写在 `scripts/diag/check-deploy-drift.py` 的常量里**（`DEPLOY_MANIFEST` / `LOCAL_ONLY` / `KNOWN_NAS` / `IMAGE_ONLY`）：
+
+```bash
+python scripts/diag/check-deploy-drift.py     # 漂移哨兵：B 方向「未登记」应恒为 0；A 方向报 NAS 侧杂物
+```
+
+- 新增/删文件后**登记要跟上**，漏登记会被 `tests/test_drift_lists.py` 报出来。
+- **NAS 侧清场只出计划、由人对真机确认**（哨兵契约：只读、绝不对 UNC 跑 rm）。
+
+### 5.7 一次结构变更的"抓静默"清单（改名/收拢后必查）
+
+1. `md5sum /app/scripts/drive-loop.py` 回读 == 本地（哨兵 `PHASE_IDLE` 只证"不是远古版"，**真判据是 md5**）。
+2. drive-loop 容器挂载源 == 新根（`docker inspect reseed-drive-loop --format '{{json .Mounts}}'`）。
+3. `grep first_existing drive-loop.log` 一批次内**无** warning（路径错**唯一**信号）。
+4. 日报 metrics 非 0（`SUMMARY §26.15` 的 `packpct` 形状）。
+5. `docker inspect` cross-seed / orchestrator / watcher 的 `./data/…` 挂载源都在。
+
+### 5.8 判据写在**能被证伪**的地方
+
+- 断言/登记**逐条点名**，不用"全部满足 X"这种会被无关输入影响的判据（见
+  `tests/test_drive_loop_service.py` ①k 的重写：从"每条挂载都 1:1"改成"逐条点名四条挂载"）。
+- 新增/删文件后登记要跟上：`scripts/diag/check-deploy-drift.py` 的常量
+  `DEPLOY_MANIFEST` / `LOCAL_ONLY` · `KNOWN_NAS` · `IMAGE_ONLY`（走镜像的源码）。

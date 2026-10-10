@@ -68,11 +68,12 @@ scripts/nas-update-env.sh
 #     是**漏了**。与 `.env*` 那条同源：靠"我记得加了"不如靠一条规则兜住。
 .claudine/
 
-# ★ 2026-10-05：`.claude/` 下的**会话状态**（todo / transcript / 临时设置）是本机运行时，
-#   不入库；但 **`.claude/rules` 是项目规则、要提交**（与 `CLAUDE.md` 一起被读）。
-#   ⇒ 只忽略 `.claude/` 下除 `rules` 之外的所有内容。
-.claude/*
-!.claude/rules
+# ★ 2026-10-10：`.claude/` 下的**会话状态**（todo / transcript / 临时设置）是本机运行时，不入库。
+#   ★ 历史：原有一条 `!.claude/rules` 白名单，想让 `.claude/rules` 与 `CLAUDE.md`「一起被读」——
+#     但 Claude Code 的加载约定是 `<repo>/.claude/rules/**/*.md`（目录 + .md），那个文件缺 `.md`、
+#     又不是目录 ⇒ **永远读不到**，规则空转。现结构规约已**并入 `CLAUDE.md`**（必然被加载），
+#     `.claude/rules` 已删；⇒ 整目录忽略，**不再有白名单**。
+.claude/
 
 # 本地分析用的临时目录（复制 cross-seed.db 出来读）
 .tmp-db/

@@ -165,7 +165,7 @@ reseed/                    # NAS 部署目录（2026-10-05 由 prowlarr_cross-se
 
 > ★ 2026-10-05 结构变更（`重构方案.md` §8）：容器相关文件全部收进 `data/`，`data/` 平级
 >   只留**一个** `compose.yaml`；**代码只进镜像**（本机 build + push，NAS pull），
->   compose/配置走 **SSH 直推**。规则见 `.claude/rules`。
+>   compose/配置走 **SSH 直推**。规则见 `CLAUDE.md` §5「结构规约」。
 
 
 > 开发仓库里另有 `scripts/`（`run-batch.sh` 抽样脚本、`reseed-state.py` 状态机 CLI、

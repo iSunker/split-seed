@@ -345,7 +345,7 @@ services:
       #       ★ 改名后的新根 = `/volume2/docker_ssd/reseed`。
       #     · RESEED_STATE_DB —— sidecar 状态库全路径（编排器的 `state` 子命令读同一份）。
       #   ★ 改这三者**不用重建镜像** —— 它们是运行时注入；而**改了 drive-loop 代码**
-      #     才要重建（见 `.claude/rules`「代码定位」）。
+      #     才要重建（见 `CLAUDE.md` §5「结构规约」· 代码定位）。
       - DRIVE_STATE_DIR=/state
       - COMPOSE_DIR=/volume2/docker_ssd/reseed
       - RESEED_STATE_DB=/state/hlink/state.db

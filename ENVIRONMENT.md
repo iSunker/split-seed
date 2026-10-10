@@ -99,7 +99,7 @@ grep -n '弯路 #' ENVIRONMENT.md
 - `PUID=1026` / `PGID=100` / `TZ=Asia/Shanghai`。
 - 生产栈目录：`/volume2/docker_ssd/reseed`，SMB 视图 `//iSunker-DS423/docker_ssd/reseed`。
   ★ 2026-10-05：原名 `prowlarr_cross-seed_autohardlink`，已改名 `reseed`；**容器相关目录收进 `data/`**，
-  平级只留一个 `compose.yaml`。代码只进镜像（本机 build+push / NAS pull）。详见 `重构方案.md` §8 与 `.claude/rules`。
+  平级只留一个 `compose.yaml`。代码只进镜像（本机 build+push / NAS pull）。详见 `重构方案.md` §8 与 `CLAUDE.md` §5「结构规约」。
 
 ### 版本
 
