@@ -14,6 +14,10 @@
 # 唯一的例外：`.env.example` 是**纯占位符模板**（本地 .env 的存根），本来就该提交。
 # 注意 `!` 规则必须在 `.env*` **之后**，且父级目录不能被排除。
 !.env.example
+# ★ 2026-10-11（#57）：FARM_EXTRA 外置成独立文件 `$COMPOSE_DIR/.farm-extra`（见 summary/33）。
+#   它**不被** `.env*` 匹配（`git check-ignore -v .farm-extra` 实测未命中）⇒ 必须显式忽略。
+#   理由同 .env：**生产现场配置**（真实发布名/相对路径）。虽不含凭据，也不该进公开仓库。
+.farm-extra
 
 # Prowlarr 配置目录含各站 cookie/passkey/apikey —— 忽略全部内容，只保留占位 .gitkeep
 data/prowlarr/*

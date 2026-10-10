@@ -93,11 +93,32 @@ def write_env(deep_line: str = None, flat_line: str = None):
     """写 CRLF .env。默认 = 扁平源 Flat + 深源 DC/01.green + FARM_DEPTH=2。
 
     ★ 路径写 **正斜杠**（同 `run()` 的理由）。
+    ★★ 2026-10-11（#57）：FARM_EXTRA 已**外置**到 `$COMPOSE_DIR/.farm-extra`，
+       故这里**不再**写 FARM_EXTRA 行 —— 它由 `write_extra()` 单独落。
     """
     flat = flat_line if flat_line is not None else (SRC / "Flat").as_posix()
     deep = deep_line if deep_line is not None else DEEP.as_posix()
     body = f"DATA_DIRS=\r\nFARM_SOURCES={flat}\r\nFARM_DEEP_SOURCES={deep}\r\nFARM_DEPTH=2\r\n"
     ENVFILE.write_bytes(body.encode("utf-8"))
+
+
+EXTRAFILE = ENV / ".farm-extra"
+
+
+def write_extra(lines=None, *, crlf: bool = False, omit: bool = False):
+    """写/删外置 FARM_EXTRA 文件 `$COMPOSE_DIR/.farm-extra`（**一行一条**）。
+
+    `lines`  : 条目行列表（函数会自己加换行）。None/[] ⇒ 空文件。
+    `crlf`   : True 则写 CRLF（测读取端剥 \\r）。
+    `omit`   : True 则**删掉**该文件（测"缺文件 = 无声明"）。
+    """
+    if omit:
+        if EXTRAFILE.exists():
+            EXTRAFILE.unlink()
+        return
+    lines = lines or []
+    eol = "\r\n" if crlf else "\n"
+    EXTRAFILE.write_bytes((eol.join(lines) + (eol if lines else "")).encode("utf-8"))
 
 
 def run(*args):
@@ -257,6 +278,117 @@ ck_true("CRLF 末条（深源）不被当缺失", "源目录缺失   : 0" in r11
 ck_true("CRLF 下深源仍被镜像",
         (FARM / "Arrow.S01-S08" / "Arrow.S01.Bluray" / "a.mkv").exists(),
         str(farm_files()))
+
+# --------------------------------------------------------------------------- #
+# ⑩–⑮ FARM_EXTRA 外置（#57）：独立文件 `$COMPOSE_DIR/.farm-extra`
+#   ★ 背景：FARM_EXTRA 原来在 .env 里多行 ⇒ docker compose 的 env_file 解析器拒读
+#     （`unexpected character ","`）⇒ compose 整条不可用。挪出 .env 到独立文件即解。
+#   ★ 本轮同时把读取策略定为**硬切**：只认新文件、**不再读** .env。
+# --------------------------------------------------------------------------- #
+print()
+print("== ⑩ FARM_EXTRA 外置文件：声明条目进期望集（含逗号名，prune 保护）==")
+reset_farm()
+write_env()
+# 手工 ln 的季包：名字含 ASCII 逗号（旧逗号分隔会把这条切成两段）。
+EXTRA_DIR = "是,大臣S01.Yes,Minister.1980.…@FRDS"
+(FARM / EXTRA_DIR).mkdir()                       # 声明条目必须真在农场里
+(FARM / EXTRA_DIR / "e01.mkv").write_bytes(b"e")
+write_extra([EXTRA_DIR])
+r12 = run("--apply")
+ck_true("apply（带 external extra）rc 0", r12.returncode == 0, r12.stderr[:200])
+ck_true("报『声明 1 条』", "FARM_EXTRA    : 声明 1 条" in r12.stdout, r12.stdout[-400:])
+# 关键：声明条目被计入期望集 ⇒ prune **不**把它当孤儿删（已删除应当为 0）。
+r12p = run("--apply", "--prune")
+ck_true("prune 后『已删除 : 0』（声明条目受保护，含逗号名不被切碎）",
+        "已删除       : 0" in r12p.stdout, r12p.stdout[-400:])
+ck_true("声明条目仍在农场", (FARM / EXTRA_DIR).exists(), str(farm_files()))
+r12v = run("--verify")
+ck("带声明且都在场 ⇒ verify rc", r12v.returncode, 0)
+
+print()
+print("== ⑪ 声明了却不存在 ⇒ 告警 + verify rc=1（声明即承诺）==")
+reset_farm()
+write_env()
+write_extra(["NoSuchPackage.S01"])
+r13 = run("--verify")
+ck("声明缺失 ⇒ verify rc", r13.returncode, 1)
+ck_true("报『声明了但农场里不存在』", "农场里不存在" in r13.stdout, r13.stdout[-400:])
+
+print()
+print("== ⑫ 硬切：只认 .farm-extra —— .env 里旧 FARM_EXTRA 不再被读 ==")
+reset_farm()
+write_env()
+# .env 里塞一个**旧式多行** FARM_EXTRA（`OldKeyShouldBeIgnored` 农场里**不存在**）。
+# ★ 若脚本**仍**读 .env，这条会被当声明 ⇒ verify 报它缺失 ⇒ rc1。
+ENVFILE.write_bytes(
+    (ENVFILE.read_bytes().decode("utf-8")
+     + "FARM_EXTRA=OldKeyShouldBeIgnored\r\nAnotherOldLine\r\n\r\n").encode("utf-8"))
+write_extra(omit=True)                            # 新文件**不存在**
+r14a = run("--apply")                             # 先把基础农场建成"同步"态
+ck_true("（前置）apply rc 0", r14a.returncode == 0, r14a.stderr[:200])
+r14 = run("--verify")
+ck("新文件缺失且旧键在场 ⇒ 不认旧键（verify rc 0）", r14.returncode, 0)
+ck_true("不报旧键的条目", "OldKeyShouldBeIgnored" not in r14.stdout, r14.stdout[-300:])
+# 反向：新文件在场 ⇒ 只认新文件（即便 .env 里也有一条）。
+(FARM / "NewReal").mkdir(exist_ok=True)
+(FARM / "NewReal" / "x.mkv").write_bytes(b"x")
+write_extra(["NewReal"])
+r14b = run("--verify")
+ck_true("新文件在场 ⇒ 认新文件、仍不认 .env 旧键",
+        "FARM_EXTRA    : 声明 1 条" in r14b.stdout
+        and "OldKeyShouldBeIgnored" not in r14b.stdout, r14b.stdout[-400:])
+
+print()
+print("== ⑬ 缺文件 / 空文件 ⇒ 无声明（与旧行为一致：零 churn、不报 FARM_EXTRA）==")
+reset_farm()
+write_env()
+write_extra(omit=True)                            # 缺文件
+r15 = run("--apply")
+ck_true("缺文件 apply rc 0", r15.returncode == 0, r15.stderr[:200])
+ck_true("缺文件 ⇒ 不打 FARM_EXTRA 声明行", "FARM_EXTRA    : 声明" not in r15.stdout, r15.stdout[-400:])
+write_extra([])                                   # 空文件
+r15b = run("--apply")
+ck_true("空文件 apply rc 0", r15b.returncode == 0, r15b.stderr[:200])
+ck_true("空文件 ⇒ 不打 FARM_EXTRA 声明行", "FARM_EXTRA    : 声明" not in r15b.stdout, r15b.stdout[-400:])
+r15v = run("--verify")
+ck("无声明 verify rc", r15v.returncode, 0)
+
+print()
+print("== ⑭ 外置文件是 CRLF ⇒ \\r 被剥（条目名不被 CR 污染）==")
+reset_farm()
+write_env()
+run("--apply")                                    # 先建同步农场（否则 verify 因基础漂移 rc1）
+(FARM / "CrlfExtra").mkdir()
+(FARM / "CrlfExtra" / "x.mkv").write_bytes(b"x")
+write_extra(["CrlfExtra"], crlf=True)
+r16 = run("--verify")
+ck("CRLF 外置文件 ⇒ verify rc（\r 若没剥会判该条不存在 ⇒ rc1）", r16.returncode, 0)
+ck_true("不报 CrlfExtra 缺失", "CrlfExtra 声明" not in r16.stdout and "农场里不存在" not in r16.stdout,
+        r16.stdout[-300:])
+
+print()
+print("== ⑮ 格式闸：绝对路径 / 含 .. ⇒ die（非 0 退出）==")
+reset_farm()
+write_env()
+write_extra(["/abs/path"])
+r17 = run("--verify")
+ck_true("绝对路径条目 ⇒ 非 0 退出", r17.returncode != 0, str(r17.returncode))
+ck_true("绝对路径有明确报错", "必须是" in (r17.stdout + r17.stderr), (r17.stdout + r17.stderr)[-200:])
+write_extra(["a/../b"])
+r17b = run("--verify")
+ck_true("含 .. 条目 ⇒ 非 0 退出", r17b.returncode != 0, str(r17b.returncode))
+
+print()
+print("== ⑯ `#` 开头行**当条目**（不认注释；反向锁定语义）==")
+reset_farm()
+write_env()
+run("--apply")                                    # 先建同步农场（否则基础漂移 rc1）
+(FARM / "#hashname").mkdir()
+(FARM / "#hashname" / "x.mkv").write_bytes(b"x")
+write_extra(["#hashname"])
+r18 = run("--verify")
+ck("`#` 行被当条目且在场 ⇒ verify rc 0", r18.returncode, 0)
+ck_true("报『声明 1 条』（没被当注释跳过）", "FARM_EXTRA    : 声明 1 条" in r18.stdout, r18.stdout[-300:])
 
 print()
 if fails:

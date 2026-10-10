@@ -49,25 +49,34 @@
 #                 ★ 2026-09-12 收进 reseed/ 父目录；改这里的同时必须改 .env 的
 #                   DATA_DIRS / LINK_DIR 两行（SUMMARY §18）
 #   SUDO         root 提权前缀（默认 sudo；已经是 root 就设 SUDO=）
-#   （期望集本身不在这里配 —— 它在 .env 的 FARM_SOURCES / FARM_DEEP_SOURCES / FARM_EXTRA）
+#   （期望集本身不在这里配 —— 它在 .env 的 FARM_SOURCES / FARM_DEEP_SOURCES，
+#     以及**独立文件** `$COMPOSE_DIR/.farm-extra`（FARM_EXTRA，见下））
 #
-# ★★ 2026-10-11：`FARM_EXTRA` —— 手工 `ln` 条目的显式期望集
+# ★★ 2026-10-11：`FARM_EXTRA` —— 手工 `ln` 条目的显式期望集（**独立文件**）
 # ------------------------------------------------------------
 # 起因：农场里有**名字无法由任何源镜像产生**的条目（手工 `ln` 的季包：Friends /
 #   GBR / 是,大臣 / Money.Heist）。它们天然不在「期望集前缀链」（COVER）里 ⇒
 #   一跑 `--apply --prune` 就被当孤儿删。
-# 方案：`FARM_EXTRA`（**换行分隔，每行一条**）列出这些条目的**农场相对路径**，它们**直接进期望集**
-#   （于是进 COVER ⇒ 被 prune 保护），但本脚本**不建它们**（条目由人手工 `ln`）。
+# 方案：把 `FARM_EXTRA` 列出的**农场相对路径**（文件 `$COMPOSE_DIR/.farm-extra`，
+#   **一行一条**）**直接进期望集**（于是进 COVER ⇒ 被 prune 保护），但本脚本**不建它们**
+#   （条目由人手工 `ln`）。
+#   · ★★ 为什么是**独立文件**而不是 .env 里的一行（2026-10-11，见下第 3 段）：
+#     compose 用 `env_file: [.env]` 读 .env，而 docker compose 的 env_file 解析器
+#     **不支持多行值**。FARM_EXTRA 多行 ⇒ compose 一读就炸、`docker compose …` 整条不可用。
+#     而 compose **根本不用** FARM_EXTRA ⇒ 挪出 .env 即解。
 #   · ★ 分隔符 = **换行**（不是逗号！）—— 发布名里可能含 ASCII 逗号（`是,大臣` / `Yes,Minister`），
 #     逗号分隔会把一条名字切成几段（2026-10-11 实测：6 条切成 18 段）。换行对任何文件名都安全。
-#     写法：`FARM_EXTRA=` 后接第一条，后续每条**各自一行**，块以空行或下一个 `KEY=` 行结束。
-#   · 留空 = 无声明 ⇒ 与旧行为**逐字节一致**（代码先上、行为惰性，同 FARM_DEEP_SOURCES）。
+#     ★ 也**不认 `#` 注释** —— 同源理由（任何 `#` 开头的名字会被当注释吃掉 ⇒ 静默丢声明）。
+#   · 文件**不存在 / 为空** = 无声明 ⇒ 与旧行为**逐字节一致**。
 #   · 声明了却**不在农场** ⇒ 告警 + 计入 `--verify` 漂移（退出码 1）—— 声明即承诺，
 #     漏 `ln` / 名字打错不该静默通过（对称于「源有农场无」）。
 #   · 每条都过格式闸：拒绝空串、绝对路径（/*）、含 `..` 段、以及"就是农场自身"。
 #   · 语义：值 = 农场相对路径，与 NAMES_TMP 同粒度 ⇒ 深条目也可（a/b/c 会被 COVER 展开）。
 #   · ★ 与 FARM_SOURCES / FARM_DEEP_SOURCES 的根本区别：那两者是**源**（枚举 + cp -al 建），
 #     本键是**声明**（只认、不建）。别把源路径填进来。
+#   · ★★ **硬切**（2026-10-11 定）：本脚本**只认**这个文件，**不再读** .env 里的 FARM_EXTRA。
+#     于是迁移必须**守序**：先建 `.farm-extra` → 再推本脚本 → 最后删 .env 里那条 FARM_EXTRA。
+#     否则「脚本已上、文件未建」的窗口内声明条目会短暂失去 prune 保护。
 #
 # ★★ 2026-10-05：镜像深度跟随源（嵌套单片）
 # ------------------------------------------------------------
@@ -188,34 +197,40 @@ FARM_SOURCES=$(sed -n 's/^[[:space:]]*FARM_SOURCES[[:space:]]*=[[:space:]]*//p' 
 FARM_DEEP_SOURCES=$(sed -n 's/^[[:space:]]*FARM_DEEP_SOURCES[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
 # ★★ 2026-10-11：**显式期望集**（手工 `ln` 的条目）。见文件头「期望集从哪来」。
 #   背景：手工 `ln` 进农场的季包（Friends/GBR/是,大臣/…）名字**无法由任何源镜像产生**
-#   ⇒ 天然不在 COVER 里 ⇒ 一跑 `--apply --prune` 就被当孤儿删。`FARM_EXTRA` 让这些
+#   ⇒ 天然不在 COVER 里 ⇒ 一跑 `--apply --prune` 就被当孤儿删。FARM_EXTRA 让这些
 #   条目**能被声明进期望集**，从而被 prune 保护。
 #   ★★ 分隔符 = **换行**（每行一条，不是逗号！）—— 2026-10-11 实测教训：
 #      发布名里**可能含 ASCII 逗号**（`是,大臣` / `Yes,Minister`），逗号分隔会把一条
 #      名字切成几段（实测 6 条切成 18 段）。换行则任何名字都安全（文件名不含换行）。
-#      值 = **农场相对路径**（相对 $FARM），多行，例如：
-#          FARM_EXTRA=Friends.S01.1994.…-HDH
+#   ★★★ 2026-10-11（#57）**外置到独立文件** `$COMPOSE_DIR/.farm-extra`：
+#      **为什么不能再放 .env** —— compose 用 `env_file: [.env]` 读它，而 docker compose
+#      的 env_file/.env 解析器**不支持多行值**。FARM_EXTRA 正是多行 ⇒ compose 一读就炸：
+#          failed to read …/.env: line 69: unexpected character "," in variable name
+#      ⇒ 生产上 `docker compose up/…` 整条命令**不可用**（2026-10-11 实测踩到）。
+#      而 compose **根本不用** FARM_EXTRA（它只透传 DATA_DIRS；FARM_EXTRA 是 build-farm.sh 私事）
+#      ⇒ 把它挪出 .env、单独一个文件，.env 恢复单行可解析，compose 就活了。
+#   ★ 新文件格式：**纯文本，一行一条「农场相对路径」**（相对 $FARM），UTF-8，建议 **LF**：
+#          Friends.S01.1994.…-HDH
 #          Friends.S02.1995.…-HDH
 #          是,大臣S01.Yes,Minister.1980.…@FRDS
-#   读取规则：`FARM_EXTRA=` 所在行取等号后的值，**并续读到首个空行或首个 `KEY=` 行为止**
-#       （即该键的"块"）。这样多行条目一个键就能表达，且不吞后面的 `KEY=value` 行。
-#       ★ 与 DATA_DIRS/FARM_SOURCES/FARM_DEEP_SOURCES 的读法（head -1）**不同** —— 那三个仍是
-#         单行逗号分隔（它们的名字历史无逗号）；本键独用多行。
+#      读取规则：整文件逐行都是条目；**空行跳过**（剥 CR）；**不认 `#` 注释**（见下）。
 #   ★ 与 FARM_SOURCES/FARM_DEEP_SOURCES 的**根本区别**：后两者是「源」，本脚本会去
-#     枚举并 `cp -al` 建条目；`FARM_EXTRA` 是「**声明**」—— 本脚本**只认它、不建它**，
+#     枚举并 `cp -al` 建条目；FARM_EXTRA 是「**声明**」—— 本脚本**只认它、不建它**，
 #     条目由人在农场侧手工 `ln`（AI 不写 NAS §A.10）。声明了却不存在 ⇒ 告警 + 计入 verify 漂移。
-#   ★ 留空 = 无声明 ⇒ 与旧行为**逐字节一致**（代码先上、行为惰性，同 FARM_DEEP_SOURCES）。
-FARM_EXTRA=$(awk '
-  /^[[:space:]]*FARM_EXTRA[[:space:]]*=/ {
-    sub(/^[[:space:]]*FARM_EXTRA[[:space:]]*=[[:space:]]*/, "")
-    print; inblock=1; next
-  }
-  inblock {
-    if ($0 ~ /^[[:space:]]*$/) exit                 # 空行结束
-    if ($0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) exit  # 下一个 KEY= 结束
-    print
-  }
-' .env | tr -d '\r')
+#   ★ 文件**不存在 / 为空** ⇒ 无声明 ⇒ 与旧行为**逐字节一致**（代码先上、行为惰性）。
+#   ★★ 读取策略 = **硬切**（2026-10-11 定）：只认这个文件；**不再读** .env 里的 FARM_EXTRA。
+#      语义单一、杜绝"两处声明各自漂开"（本仓反复吃过这个亏）。代价：迁移必须守序
+#      （先建文件、再推本脚本、最后改 .env —— 见 summary/33 与 _tmp-tv1 设计稿 §9）。
+#   ★★ **不认 `#` 注释**：本键外置的根因就是"名字里的逗号被朴素解析器切碎"；
+#      `#` 注释会引入**同一类**静默风险（任何 `#` 开头的名字被当注释吃掉 ⇒ 丢声明 ⇒
+#      被当孤儿删）。故一行就是一条，verbatim（只跳过"整行全空白"）。
+EXTRA_FILE="$COMPOSE_DIR/.farm-extra"
+if [ -f "$EXTRA_FILE" ]; then
+  # 逐行 `s/\r$//`（容忍 CRLF；.env 曾因没剥 CR 踩坑，见下）,整行全空白删掉，其余原样。
+  FARM_EXTRA=$(sed -e 's/\r$//' -e '/^[[:space:]]*$/d' "$EXTRA_FILE")
+else
+  FARM_EXTRA=""
+fi
 FARM_DEPTH=$(sed -n 's/^[[:space:]]*FARM_DEPTH[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
 # 默认 2：与 reseed-state.py init --depth 的默认值对齐（见文件头）。
 FARM_DEPTH="${FARM_DEPTH:-2}"
@@ -358,6 +373,7 @@ rm -f "$PROBE_SRC" "$PROBE_DST"
 
 say "===================== 硬链接农场构建 ====================="
 say "  .env       : $COMPOSE_DIR/.env"
+say "  .farm-extra: $EXTRA_FILE （$([ -f "$EXTRA_FILE" ] && echo 存在 || echo '缺失 = 无 FARM_EXTRA 声明')）"
 say "  农场       : $FARM"
 say "  清单       : $MANIFEST"
 say "  模式       : $( [ "$VERIFY_ONLY" = 1 ] && echo '仅校验' || { [ "$DRY" = 1 ] && echo 'DRY-RUN（不建）' || echo 'APPLY'; } )$([ "$PRUNE" = 1 ] && echo ' + prune')"
