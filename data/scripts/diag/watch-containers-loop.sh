@@ -58,9 +58,11 @@ set -u
 #   · `--compose` 的路径**不在容器里做存在性判断**：那是 watch-containers.sh
 #     的守卫（且它必须看到"和宿主一样"的路径语义）。
 DEFAULT_COMPOSE_DIR="${WATCH_COMPOSE_DIR:-/volume2/docker_ssd/reseed}"
-# ★ 项目 B（qbittorrent-reseed）的 compose 目录 —— 2026-10-01 加。
+# ★ 项目 B（qbit-reseed1..4）的 compose 目录 —— 2026-10-01 加。
 #   它**不是**本项目栈，但 watch-containers.sh 现在也盯它（跨项目），故本循环要透传。
-DEFAULT_COMPOSE_DIR_QB="${WATCH_COMPOSE_DIR_QB:-/volume2/docker_ssd/qbittorrent-reseed}"
+#   ★ 2026-10-06：保种实例改名/多实例 ⇒ 目录 qbittorrent-reseed → qbit-reseed，
+#     与 watch-containers.sh 的 `COMPOSE_DIR_QB` 默认**保持一致**。
+DEFAULT_COMPOSE_DIR_QB="${WATCH_COMPOSE_DIR_QB:-/volume2/docker_ssd/qbit-reseed}"
 DEFAULT_INTERVAL="${WATCH_INTERVAL:-600}"
 
 SELF="$(dirname "$0")/watch-containers.sh"
