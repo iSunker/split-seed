@@ -143,15 +143,22 @@ print("\n== ② ★★ 清单里**不许有死规则**（死规则比缺规则�
 #     ⇒ **不能**去盘上核，只能核"它在 `summary/26` 里被**实测记过一笔**"。
 #     这与 `tests/test_drift_lists.py` ② 段同形，只是把"盘上有没有"换成
 #     "文档里有没有实证"（读不到的东西不许冒充"没有"，`ERR-AI-03`）。
-_SUMMARY = REPO / "summary" / "26-跨会话任务盘面与旧会话清场.md"
-check("前提：summary/26 在（② 段的实证来源）", _SUMMARY.is_file(), str(_SUMMARY))
+#   ★ 2026-10-10：原单文件 `26-跨会话任务盘面与旧会话清场.md` 已**拆成**
+#     `26-1-… / 26-2-… / 26-3-… / 26-4a-… / 26-4b-…` 五份（同 §26 章）。
+#     ⇒ 不能钉单个文件名（会因拆分而"前提不存在"假红）——改成 glob 全章，
+#       只要**任一份**里有该名字的实证即算登记过。
+_SUMMARY_PARTS = sorted((REPO / "summary").glob("26-*.md"))
+check("前提：summary/26 章在（② 段的实证来源；可拆分多份）",
+      len(_SUMMARY_PARTS) > 0,
+      "没找到 summary/26-*.md —— ② 段失去实证来源")
 
-if _SUMMARY.is_file():
-    _SUM_TEXT = _SUMMARY.read_text(encoding="utf-8", errors="replace")
+if _SUMMARY_PARTS:
+    _SUM_TEXT = "\n".join(
+        p.read_text(encoding="utf-8", errors="replace") for p in _SUMMARY_PARTS)
     _dead = [(n, why) for n, why in M.CATEGORY_DIR_NAMES if n not in _SUM_TEXT]
-    check("★ 清单每条都在 summary/26 里有**实证记录**（没有死规则）",
+    check("★ 清单每条都在 summary/26 章里有**实证记录**（没有死规则）",
           not _dead,
-          "以下 %d 条在 summary/26 里查不到 —— 无法证明它真的会在 TV/ 里出现：\n"
+          "以下 %d 条在 summary/26 章里查不到 —— 无法证明它真的会在 TV/ 里出现：\n"
           "        ← %s" % (len(_dead), "\n        ← ".join(n for n, _ in _dead)))
 
 # --------------------------------------------------------------------------- #

@@ -181,15 +181,29 @@ print("\n== ② ★★ 两份清单里**不许有死规则**（死规则比缺�
 #     而死规则**看起来已经登记了** ⇒ 下一个人不会再去看它一眼。
 #     本项目已在 `ALERT 只打在杂物上` 那条反向结构检查上吃过同形的亏。
 
-# ★★ 例外一条，且**只此一条**：`^summary/` 是**目录前缀**规则 —— 它匹配的是
-#   `summary/xx.md` 这类**路径**，而本文件上面把口径收窄成了「`.py`/`.sh`」。
-#   ⇒ 在这份收窄后的清单里它必然"匹配不到"，但那**不是死规则**，是**口径不同**
-#     （判"死"要拿**同口径**的清单判，否则就是在量错对象 —— `A.11`）。
-#   ★ 用路径前缀判它活着：目录里至少有一个已跟踪文件。
-_DEAD_WHITELIST = {r"^summary/"}           # ★ 加新条目必须写清"为什么它不是死规则"
+# ★★ 例外两条，且**各自写清理由**：它们是**目录前缀**规则 —— 匹配的是路径，
+#   而本文件上面把口径收窄成了「`.py`/`.sh`」。⇒ 在这份收窄后的清单里它们必然
+#   "匹配不到"，但那**不是死规则**，是**口径不同**（判"死"要拿**同口径**的清单判，
+#   否则就是在量错对象 —— `A.11`）。
+#   · `^summary/`：目录里有已跟踪的 `summary/*.md` ⇒ 用**路径前缀**判它活着。
+#   · `^\.claude/`（2026-10-10 加）：`CLAUDE.md §5` 收敛后 `.claude/` 整目录是**本机
+#     运行时**、且被 `.gitignore` 排掉 ⇒ **没有任何已跟踪文件**在它下面。
+#     它对 LOCAL_ONLY 的声明是**有意**的（本机目录、NAS 不读），不是漏登记的死规则。
+#     ⇒ 不能靠"匹配已跟踪文件"判活；它对**盘上**是否存在也不作承诺（可能整目录都不在）。
+#     ★ 与 `^summary/` 的差别：后者能用 tracked 前缀判活，前者连 tracked 前缀都没有。
+#       ⇒ 归入白名单时要单独说明"它为什么永远匹配不到、且这不是缺陷"。
+#   分两档（别混进一个集合 —— 它们"活着的理由"不同，见上）：
+_DEAD_WHITELIST = {r"^summary/"}            # 目录前缀，用 tracked 前缀判活
+# ★ 第二档：**按设计**永不匹配任何已跟踪文件的规则（gitignore 的本机目录）。
+#   它"活着"是因为**声明本身有意**（本机运行时、NAS 不读），不是因为匹配到了什么。
+#   加任何一条前，先问：它是不是"本机才有、且被 gitignore"？是才准入。
+_ALIVE_BY_DESIGN = {r"^\.claude/"}
 
 
 def _alive(rx: str, why: str) -> bool:
+    if rx in _ALIVE_BY_DESIGN:
+        # 有意登记的本机目录（gitignore 掉 ⇒ 恒无 tracked 文件）⇒ 不是死规则。
+        return True
     if rx in _DEAD_WHITELIST:
         # 目录前缀规则：目录下还有已跟踪文件就算活着
         prefix = rx.rstrip("$").lstrip("^")
@@ -198,8 +212,8 @@ def _alive(rx: str, why: str) -> bool:
 
 
 _dead_local = [(rx, why) for rx, why in M.LOCAL_ONLY if not _alive(rx, why)]
-check("★ LOCAL_ONLY 没有死规则（白名单 %d 条按目录前缀判）"
-      % len(_DEAD_WHITELIST), not _dead_local,
+check("★ LOCAL_ONLY 没有死规则（白名单 %d 条 + 按设计 %d 条不按 tracked 判）"
+      % (len(_DEAD_WHITELIST), len(_ALIVE_BY_DESIGN)), not _dead_local,
       "匹配不到任何已跟踪文件 %d 条：\n        ← %s"
       % (len(_dead_local), "\n        ← ".join(rx for rx, _ in _dead_local[:10])))
 

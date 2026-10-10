@@ -248,12 +248,17 @@ def next_due_at(
     *,
     cadence_days: int = DEFAULT_CADENCE_DAYS,
     cadence_by_indexer: dict[str, int] | None = None,
+    now: datetime | None = None,
 ) -> datetime | None:
     """下一次"最早会变得可搜"的时刻（用来填 next_retry_at / 汇报）。
 
     已经该搜的返回 None（= 现在就能搜）。
+
+    ★ `now` 与 `due_indexers` **同款**（可注入）：生产调用不传 ⇒ 用真实时钟；
+      测试可传固定 `now` 让夹具不随墙钟漂（否则 NEXT 的"昨天/30 天前"夹具
+      一旦撞上真实 cadence 就会红 —— 2026-10-10 实测踩到过）。
     """
-    now = datetime.now()
+    now = now or datetime.now()
     pool = list(indexers_now) or sorted(indexer_seen) or [UNKNOWN_INDEXER]
     times = []
     for ix in pool:

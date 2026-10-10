@@ -113,9 +113,9 @@ ck("③b 阳性对照：把周期调成 100 天 ⇒ 前一条又不该到期",
 print()
 print("=== ④ ★ next_due_at 是同一 bug 的第二处 ===")
 ck("④a 昨天搜过 ⇒ 下一次到期**不是** None（None = 现在就该搜）",
-   S.next_due_at({"NanyangPT (南洋)": FRESH}, ["NanyangPT"]) is None, False)
+   S.next_due_at({"NanyangPT (南洋)": FRESH}, ["NanyangPT"], now=NOW) is None, False)
 ck("④b 30 天前搜过 ⇒ 返回 None（现在就该搜）",
-   S.next_due_at({"NanyangPT (南洋)": OLD}, ["NanyangPT"]), None)
+   S.next_due_at({"NanyangPT (南洋)": OLD}, ["NanyangPT"], now=NOW), None)
 
 print()
 print("=== ⑤ ★★ 阴性对照：拿裸比逻辑当判据，确认它会判错 ===")
