@@ -49,7 +49,25 @@
 #                 ★ 2026-09-12 收进 reseed/ 父目录；改这里的同时必须改 .env 的
 #                   DATA_DIRS / LINK_DIR 两行（SUMMARY §18）
 #   SUDO         root 提权前缀（默认 sudo；已经是 root 就设 SUDO=）
-#   （期望集本身不在这里配 —— 它在 .env 的 FARM_SOURCES / DATA_DIRS，见上一节）
+#   （期望集本身不在这里配 —— 它在 .env 的 FARM_SOURCES / FARM_DEEP_SOURCES / FARM_EXTRA）
+#
+# ★★ 2026-10-11：`FARM_EXTRA` —— 手工 `ln` 条目的显式期望集
+# ------------------------------------------------------------
+# 起因：农场里有**名字无法由任何源镜像产生**的条目（手工 `ln` 的季包：Friends /
+#   GBR / 是,大臣 / Money.Heist）。它们天然不在「期望集前缀链」（COVER）里 ⇒
+#   一跑 `--apply --prune` 就被当孤儿删。
+# 方案：`FARM_EXTRA`（**换行分隔，每行一条**）列出这些条目的**农场相对路径**，它们**直接进期望集**
+#   （于是进 COVER ⇒ 被 prune 保护），但本脚本**不建它们**（条目由人手工 `ln`）。
+#   · ★ 分隔符 = **换行**（不是逗号！）—— 发布名里可能含 ASCII 逗号（`是,大臣` / `Yes,Minister`），
+#     逗号分隔会把一条名字切成几段（2026-10-11 实测：6 条切成 18 段）。换行对任何文件名都安全。
+#     写法：`FARM_EXTRA=` 后接第一条，后续每条**各自一行**，块以空行或下一个 `KEY=` 行结束。
+#   · 留空 = 无声明 ⇒ 与旧行为**逐字节一致**（代码先上、行为惰性，同 FARM_DEEP_SOURCES）。
+#   · 声明了却**不在农场** ⇒ 告警 + 计入 `--verify` 漂移（退出码 1）—— 声明即承诺，
+#     漏 `ln` / 名字打错不该静默通过（对称于「源有农场无」）。
+#   · 每条都过格式闸：拒绝空串、绝对路径（/*）、含 `..` 段、以及"就是农场自身"。
+#   · 语义：值 = 农场相对路径，与 NAMES_TMP 同粒度 ⇒ 深条目也可（a/b/c 会被 COVER 展开）。
+#   · ★ 与 FARM_SOURCES / FARM_DEEP_SOURCES 的根本区别：那两者是**源**（枚举 + cp -al 建），
+#     本键是**声明**（只认、不建）。别把源路径填进来。
 #
 # ★★ 2026-10-05：镜像深度跟随源（嵌套单片）
 # ------------------------------------------------------------
@@ -168,6 +186,36 @@ DATA_DIRS=$(sed -n 's/^[[:space:]]*DATA_DIRS[[:space:]]*=[[:space:]]*//p' .env |
 FARM_SOURCES=$(sed -n 's/^[[:space:]]*FARM_SOURCES[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
 # ★ 2026-10-05：深镜像源（见文件头「镜像深度跟随源」）。同样必须 tr -d '\r'（.env 是 CRLF）。
 FARM_DEEP_SOURCES=$(sed -n 's/^[[:space:]]*FARM_DEEP_SOURCES[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
+# ★★ 2026-10-11：**显式期望集**（手工 `ln` 的条目）。见文件头「期望集从哪来」。
+#   背景：手工 `ln` 进农场的季包（Friends/GBR/是,大臣/…）名字**无法由任何源镜像产生**
+#   ⇒ 天然不在 COVER 里 ⇒ 一跑 `--apply --prune` 就被当孤儿删。`FARM_EXTRA` 让这些
+#   条目**能被声明进期望集**，从而被 prune 保护。
+#   ★★ 分隔符 = **换行**（每行一条，不是逗号！）—— 2026-10-11 实测教训：
+#      发布名里**可能含 ASCII 逗号**（`是,大臣` / `Yes,Minister`），逗号分隔会把一条
+#      名字切成几段（实测 6 条切成 18 段）。换行则任何名字都安全（文件名不含换行）。
+#      值 = **农场相对路径**（相对 $FARM），多行，例如：
+#          FARM_EXTRA=Friends.S01.1994.…-HDH
+#          Friends.S02.1995.…-HDH
+#          是,大臣S01.Yes,Minister.1980.…@FRDS
+#   读取规则：`FARM_EXTRA=` 所在行取等号后的值，**并续读到首个空行或首个 `KEY=` 行为止**
+#       （即该键的"块"）。这样多行条目一个键就能表达，且不吞后面的 `KEY=value` 行。
+#       ★ 与 DATA_DIRS/FARM_SOURCES/FARM_DEEP_SOURCES 的读法（head -1）**不同** —— 那三个仍是
+#         单行逗号分隔（它们的名字历史无逗号）；本键独用多行。
+#   ★ 与 FARM_SOURCES/FARM_DEEP_SOURCES 的**根本区别**：后两者是「源」，本脚本会去
+#     枚举并 `cp -al` 建条目；`FARM_EXTRA` 是「**声明**」—— 本脚本**只认它、不建它**，
+#     条目由人在农场侧手工 `ln`（AI 不写 NAS §A.10）。声明了却不存在 ⇒ 告警 + 计入 verify 漂移。
+#   ★ 留空 = 无声明 ⇒ 与旧行为**逐字节一致**（代码先上、行为惰性，同 FARM_DEEP_SOURCES）。
+FARM_EXTRA=$(awk '
+  /^[[:space:]]*FARM_EXTRA[[:space:]]*=/ {
+    sub(/^[[:space:]]*FARM_EXTRA[[:space:]]*=[[:space:]]*/, "")
+    print; inblock=1; next
+  }
+  inblock {
+    if ($0 ~ /^[[:space:]]*$/) exit                 # 空行结束
+    if ($0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) exit  # 下一个 KEY= 结束
+    print
+  }
+' .env | tr -d '\r')
 FARM_DEPTH=$(sed -n 's/^[[:space:]]*FARM_DEPTH[[:space:]]*=[[:space:]]*//p' .env | head -1 | tr -d '\r')
 # 默认 2：与 reseed-state.py init --depth 的默认值对齐（见文件头）。
 FARM_DEPTH="${FARM_DEPTH:-2}"
@@ -333,10 +381,13 @@ ENUM_I="$MANIFEST.enum.i.tmp"
 PRUNE_I="$MANIFEST.prune.i.tmp"
 SEEN_I="$MANIFEST.seen.i.tmp"
 COVER_TMP="$MANIFEST.cover.tmp"
+# ★ 2026-10-11：FARM_EXTRA 里「声明了但农场里没有」的条目（verify 据此计漂移）。
+EXTRA_MISSING="$MANIFEST.extra_missing.tmp"
 : > "$NAMES_TMP"
 : > "$MISSING_TMP"
 : > "$SEEN_I"
 : > "$COVER_TMP"
+: > "$EXTRA_MISSING"
 # ★ 只有真要落盘（--apply）才准备清单本体。verify/dry-run 写它纯属浪费 ——
 #   115 KB 要经 SMB 来回跑一趟，最后还是删掉。
 if [ "$DRY" = 0 ]; then : > "$MANIFEST.tmp"; fi
@@ -345,7 +396,7 @@ if [ "$DRY" = 0 ]; then : > "$MANIFEST.tmp"; fi
 #    .reseed_farm.manifest.tsv.tmp（大小和真清单一模一样）。
 #    改成 trap 统一兜底：无论从哪条路出去（正常 exit / die / set -e 报错 /
 #    Ctrl-C）都会收干净。apply 成功后这两个文件已被 mv 走，rm -f 是空操作。
-trap 'rm -f "$PROBE_SRC" "$PROBE_DST" "$NAMES_TMP" "$MISSING_TMP" "$ENUM_I" "$PRUNE_I" "$SEEN_I" "$COVER_TMP" "$MANIFEST.tmp"' \
+trap 'rm -f "$PROBE_SRC" "$PROBE_DST" "$NAMES_TMP" "$MISSING_TMP" "$ENUM_I" "$PRUNE_I" "$SEEN_I" "$COVER_TMP" "$EXTRA_MISSING" "$MANIFEST.tmp"' \
   EXIT INT TERM
 
 # _enum_rel <源目录> <深度>：把源枚举成「相对 $FARM 的路径」，最多 depth 层。
@@ -467,6 +518,37 @@ done
 IFS=$OLDIFS
 set +f
 
+# ★★ 2026-10-11：把 FARM_EXTRA 的**声明条目**并入期望集（见文件头「FARM_EXTRA」）。
+#   位置很关键：必须在 N_EXPECT 计算**之前**、COVER 构建之前 —— 于是这些条目
+#   ① 计入 N_EXPECT（print 总数）；② 进 COVER（⇒ is_covered 认它们 ⇒ prune 不删）；
+#   ③ 但不影响枚举计数 N_SRC/N_HAVE（它们不是被枚举出来的）。
+#   ★ 存在性：声明了却不在农场 ⇒ 告警 + 记进 EXTRA_MISSING（下面 verify 段据此计漂移）。
+#   ★★ 分隔符 = **换行**（每行一条）—— 发布名可能含 ASCII 逗号（是,大臣 / Yes,Minister），
+#      逗号分隔会被切碎。故此处按行读（IFS= read -r），不再按逗号切。
+#   格式闸：空行跳过 / 绝对路径（/*）/ 含 `..` 段 → 直接 die（配置错要早停，别静默）。
+N_EXTRA=0; N_EXTRA_MISS=0
+if [ -n "$FARM_EXTRA" ]; then
+  while IFS= read -r _ex; do
+    [ -n "$_ex" ] || continue
+    case "$_ex" in
+      /*|..|../*|*/../*|*/..) die "FARM_EXTRA 条目必须是**农场相对路径**（非绝对、不含 ..）: '$_ex'" ;;
+    esac
+    printf '%s\n' "$_ex" >> "$NAMES_TMP"
+    N_EXTRA=$((N_EXTRA + 1))
+    if [ ! -e "$FARM/$_ex" ]; then
+      say "  [!!] FARM_EXTRA 声明了但农场里不存在（漏 ln / 名字错？）: $_ex"
+      printf '%s\n' "$_ex" >> "$EXTRA_MISSING"
+      N_EXTRA_MISS=$((N_EXTRA_MISS + 1))
+    fi
+  done <<EOF
+$FARM_EXTRA
+EOF
+  [ "$N_EXTRA" -gt 0 ] && say "FARM_EXTRA    : 声明 $N_EXTRA 条（手工 ln 条目，本脚本只认不建）$([ "$N_EXTRA_MISS" -gt 0 ] && echo "  ★ 其中 $N_EXTRA_MISS 条农场里不存在")"
+  # ★ 去重 + 稳定排序：FARM_EXTRA 可能与镜像条目重名（那是**冗余声明**，不报错），
+  #   也可能与其它 FARM_EXTRA 条目重复 —— 二者都靠 sort -u 收敛，保证 NAMES_TMP 稳定。
+  LC_ALL=C sort -u "$NAMES_TMP" -o "$NAMES_TMP"
+fi
+
 N_EXPECT=$(wc -l < "$NAMES_TMP" 2>/dev/null | tr -d ' \t' || echo 0)
 
 # ★★ 2026-10-05：「覆盖集」—— 判孤儿的唯一正确口径。
@@ -582,13 +664,22 @@ fi
 say ""
 # ★ 2026-10-05：有深源时 N_SRC 含**嵌套层**（不只直接子项）—— 而 N_NEW 是**如实计数**
 #   （每个顶层直接子项算 1，一个深源 = 父容器 + N 个子层，不是一次 cp -al 计 1）。
-say "期望集条目合计 : $N_SRC   （= 本次期望集 $N_EXPECT 条）$([ -n "$FARM_DEEP_SOURCES" ] && echo '  ★ 含嵌套层（深源按 FARM_DEPTH 展开）')"
+# ★ 2026-10-11：有 FARM_EXTRA 时 N_EXPECT ≠ N_SRC（extras 不在枚举计数里，且可能与镜像去重）
+#   ⇒ 这里把 extras 单列，避免"$N_SRC = $N_EXPECT"看起来自相矛盾。
+say "期望集条目合计 : $N_EXPECT   （镜像枚举 $N_SRC 条$([ "$N_EXTRA" -gt 0 ] && echo " + FARM_EXTRA 声明 $N_EXTRA 条，去重后").$([ -n "$FARM_DEEP_SOURCES" ] && echo '  ★ 含嵌套层（深源按 FARM_DEPTH 展开）')）"
 if [ "$VERIFY_ONLY" = 1 ]; then
   # 三条漂移各自是**不同的事**，不能合成一个数：
   #   源有农场无 → 新内容没进农场（cross-seed 白跑，搜不到这部）
   #   农场有源无 → **源删了/改名了，农场那条还留着**（cross-seed 照样拿去搜 = 白烧额度）
   #   源目录本身缺失 / 跨卷 → 期望集不完整，**上面的数都不可信**（比有漂移更严重）
-  N_MISSING=$((N_EXPECT - N_HAVE))
+  # ★ 2026-10-11：**不能再**用 `N_EXPECT - N_HAVE` 算"源有农场无"。
+  #   成因：N_EXPECT 现在含 FARM_EXTRA 声明条目；而声明条目里若有**与镜像条目重名**的
+  #   （冗余声明，sort -u 去重后从 NAMES_TMP 里消失），N_EXTRA 就**多算**了 ⇒ 减出来可能
+  #   为负（实测 -1）。★ 教训：拿"两个集合的势之差"当漂移数，前提是两集合同构 ——
+  #   一旦混进第三类来源（这里是 extras），这个前提就没了。
+  #   正解：**直接数 MISSING_TMP** —— 它在枚举时对**每个"镜像有、农场没有"的条目**恰好
+  #   落一行（仅 --verify 落），与 extras 天然无关，既不重复也不会负。
+  N_MISSING=$(wc -l < "$MISSING_TMP" 2>/dev/null | tr -d ' \t'); [ -n "$N_MISSING" ] || N_MISSING=0
   # ★ 2026-10-05：孤儿 = 农场里**不在覆盖集**的**顶层**条目（内层交给它那次的整树处理）。
   #   不再用 `N_FARM - N_HAVE` —— 那个恒等式只在"农场与期望同粒度"时成立，
   #   混合扁平+深源时 N_FARM（合法条目）含深层、N_HAVE（枚举计数）粒度不同，会算错。
@@ -605,6 +696,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
   say "农场现有条目   : $N_FARM   （合法：∈ 期望覆盖范围）"
   say "源有但农场没有 : $N_MISSING"
   say "农场有但源没有 : $N_ORPHAN"
+  [ "$N_EXTRA" -gt 0 ] && say "FARM_EXTRA     : 声明 $N_EXTRA 条（手工 ln），其中缺 $N_EXTRA_MISS 条"
   [ "$N_MISS" -gt 0 ]     && say "源目录缺失     : $N_MISS"
   [ "$N_SKIP_DEV" -gt 0 ] && say "跨卷跳过       : $N_SKIP_DEV"
 
@@ -644,6 +736,19 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     say "        拿它自动删等于把一次误判放大成不可逆的数据丢失。"
   fi
 
+  if [ "$N_EXTRA_MISS" -gt 0 ]; then
+    say ""
+    say "  [漂移] FARM_EXTRA 声明了、农场里却没有（漏 ln 或名字打错）："
+    SHOWN=0
+    while IFS= read -r nm; do
+      [ -n "$nm" ] || continue
+      if [ "$SHOWN" -lt 20 ]; then say "      $nm"; fi
+      SHOWN=$((SHOWN + 1))
+    done < "$EXTRA_MISSING"
+    [ "$SHOWN" -gt 20 ] && say "      …还有 $((SHOWN - 20)) 条"
+    say "      ★ 这些条目不会被 --apply 自动创建（本脚本只认不建）—— 请手工 ln 后再 verify。"
+  fi
+
   if [ "$N_MISS" -gt 0 ] || [ "$N_SKIP_DEV" -gt 0 ]; then
     say ""
     say "  [!!] 有源目录不存在 / 跨卷被跳过 —— 期望集本身是**不完整的**，"
@@ -656,7 +761,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
   say ""
   # ★ 退出码：计划任务靠它判成败。§16.2.2 第 1 条 —— 以前只打印计数、
   #   恒返回 0，挂上去的巡检**永远不会报警**。
-  if [ "$N_MISSING" -gt 0 ] || [ "$N_ORPHAN" -gt 0 ] || \
+  if [ "$N_MISSING" -gt 0 ] || [ "$N_ORPHAN" -gt 0 ] || [ "$N_EXTRA_MISS" -gt 0 ] || \
      [ "$N_MISS" -gt 0 ] || [ "$N_SKIP_DEV" -gt 0 ]; then
     say "★ 结论：有漂移（退出码 1）"
     exit 1
@@ -669,6 +774,7 @@ elif [ "$DRY" = 1 ]; then
   say "  源目录缺失   : $N_MISS"
   say "  跨卷跳过     : $N_SKIP_DEV"
   [ "$PRUNE" = 1 ] && say "  将要删除     : $N_PRUNE   （--prune 预演）"
+  [ "$N_EXTRA" -gt 0 ] && say "  FARM_EXTRA   : 声明 $N_EXTRA 条（手工 ln，本脚本不建），其中缺 $N_EXTRA_MISS 条"
   [ -n "$FARM_DEEP_SOURCES" ] && say "  ★ 含嵌套层：一个深源 = 父容器 + N 个子层（按 FARM_DEPTH=$FARM_DEPTH 展开）"
   say ""
   say "看清楚了就加 --apply 真建。"
@@ -678,6 +784,7 @@ else
   say "  源目录缺失   : $N_MISS"
   say "  跨卷跳过     : $N_SKIP_DEV"
   [ "$PRUNE" = 1 ] && say "  已删除       : $N_PRUNE"
+  [ "$N_EXTRA" -gt 0 ] && say "  FARM_EXTRA   : 声明 $N_EXTRA 条（手工 ln，本脚本不建），其中缺 $N_EXTRA_MISS 条"
   [ -n "$FARM_DEEP_SOURCES" ] && say "  ★ 含嵌套层：一个深源 = 父容器 + N 个子层（按 FARM_DEPTH=$FARM_DEPTH 展开）"
   say ""
   # ★ 这一段只在「还没切换」时才有意义。切换过之后 DATA_DIRS 已经是农场了，
