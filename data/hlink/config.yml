@@ -9,11 +9,12 @@
 # =====================================================================
 
 qbittorrent:
-  # 隔离的第三实例 qbittorrent-reseed。本栈已接入它所在的 docker 网络
-  # （compose 的 qbit-net = qbittorrent-reseed_default），故用服务名直连。
-  # 不要改回 http://${NAS_IP}:3060：群晖上「容器→宿主机 LAN IP→DNAT 回另一容器」
+  # 隔离的保种实例 qbit-reseed1（★ 2026-10-06 起由旧 qbittorrent-reseed:3060 改名/改多实例，
+  # 现为 qbit-reseed1..4，见 compose 的 qbit-net = qbnet）。本栈已接入该 docker 网络，
+  # 故用服务名直连。
+  # 不要改回 http://${NAS_IP}:3320：群晖上「容器→宿主机 LAN IP→DNAT 回另一容器」
   # 的回环会 timeout（2026-09-11 实测）。
-  url: "http://qbittorrent-reseed:3060"
+  url: "http://qbit-reseed1:3320"
 
   # subnet_whitelist = 依赖 qB 局域网免密白名单（见 patches/reseed-qbit.conf.md）
   # password         = 用户名/密码登录（密码放 .env 的 QBIT_PASSWORD）

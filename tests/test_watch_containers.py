@@ -105,12 +105,13 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 CONTAINERS = ["reseed-cross-seed", "reseed-drive-loop",
               "reseed-prowlarr", "reseed-flaresolverr"]
 
-# ★★ 2026-10-01：**项目 B**（另一个 compose 项目）的容器 —— 脚本现在也盯它。
-#   `qbittorrent-reseed` 与上面四个**不在同一个 compose 项目**里，脚本为它单开
-#   第二次 `up -d`（在它自己的目录里）。夹具必须**同分辨率**：既要有它的 inspect 行，
-#   也要让假 docker 记得"这次 up -d 是从哪个目录跑的"（否则"跑错目录"这个
-#   最严重的失败形态**恒绿** —— 正是 §32.2 那条教训）。
-QB_CONTAINERS = ["qbittorrent-reseed"]
+# ★★ 2026-10-01：**项目 B**（另一个 compose 项目）的容器 —— 脚本现在也盯它们。
+#   ★ 2026-10-06（R3）：qb 由「一个 `qbittorrent-reseed`」扩成 **四个**
+#     `qbit-reseed1..4`（改名 + 多实例）。它们与上面四个**不在同一个 compose 项目**里，
+#   脚本为它们单开第二次 `up -d`（在它自己的目录里）。夹具必须**同分辨率**：
+#   既要有它们的 inspect 行，也要让假 docker 记得"这次 up -d 是从哪个目录跑的"
+#   （否则"跑错目录"这个最严重的失败形态**恒绿** —— 正是 §32.2 那条教训）。
+QB_CONTAINERS = ["qbit-reseed1", "qbit-reseed2", "qbit-reseed3", "qbit-reseed4"]
 
 #: daemon 身份的**真机实测值**（2026-09-29，`docker info --format '{{.Name}}|{{.OperatingSystem}}'`）。
 #  ★ 开发机：docker-desktop|Docker Desktop     ← 必须**被拒**
@@ -145,9 +146,9 @@ ALL_OK = fixture({c: ("running", 100 + i, "healthy" if c == "reseed-drive-loop" 
 #: drive-loop 停了，其余在跑（qb 也在跑 —— 这个夹具只测"项目 A 内一个停了"）
 DL_EXITED = fixture({**{c: ("running", 100 + i, "none") for i, c in enumerate(CONTAINERS + QB_CONTAINERS)},
                      "reseed-drive-loop": ("exited", 0, "none")})
-#: ★ 项目 B（qb）停了、项目 A 四个都在跑 —— 测"第二次 up -d 落在项目 B 目录"
+#: ★ 项目 B（qb）停了一个（reseed1）、项目 A 四个都在跑 —— 测"第二次 up -d 落在项目 B 目录"
 QB_EXITED = fixture({**{c: ("running", 100 + i, "none") for i, c in enumerate(CONTAINERS + QB_CONTAINERS)},
-                     "qbittorrent-reseed": ("exited", 0, "none")})
+                     "qbit-reseed1": ("exited", 0, "none")})
 
 
 class Lab:
@@ -236,6 +237,11 @@ class Lab:
                  LAB_AFTER=str(self.after) if self.after else "",
                  LAB_DAEMON=self.daemon,
                  FAKE_DOCKER=str(self.docker),
+                 # ★★ R3（2026-10-06）：脚本新增 qb 探活（问 qb WebUI `/api/v2/app/version`）。
+                 #   离线自测**必须**把实例清单清空 —— 否则探针会真去连
+                 #   `172.24.0.1` 等网关（5s 超时 × 候选 × 实例）⇒ 整个测试挂住。
+                 #   本文件只钉容器级行为，qb 级另由 R3 自己的断言覆盖。
+                 QB_PROBE_INSTANCES="",
                  PATH=str(self.bindir) + os.pathsep + os.environ.get("PATH", ""))
         return e
 
@@ -531,8 +537,8 @@ try:
     if acts:
         check("★★ 且**不带 --profile**（项目 B 没有 profile）",
               "--profile" not in acts[0], repr(acts[0]))
-        check("★★ 且服务名就是 qbittorrent-reseed（同名，别去前缀猜）",
-              "qbittorrent-reseed" in acts[0], repr(acts[0]))
+        check("★★ 且服务名就是 qbit-reseed1（同名，别去前缀猜）",
+              "qbit-reseed1" in acts[0], repr(acts[0]))
     check("  ↳ 且项目 A 的 up -d 一次都没跑（没有多余的）",
           lab.calls_in_dir("ACTION", lab.compose) == [],
           repr(lab.calls_in_dir("ACTION", lab.compose)))
@@ -572,8 +578,8 @@ try:
     r = selftest_run(lab)
     check("★ 项目 B 拉不起来 ⇒ rc=1", r.returncode == 1, "rc=%s" % r.returncode)
     acts = lab.calls_of("ACTION")
-    check("  ↳ 且**只**对 qbittorrent-reseed 发 up -d",
-          len(acts) == 1 and "qbittorrent-reseed" in acts[0], repr(acts))
+    check("  ↳ 且**只**对 qbit-reseed1 发 up -d",
+          len(acts) == 1 and "qbit-reseed1" in acts[0], repr(acts))
     check("★★ 且项目 A 的四个**一次都不许拉**（阴性对照）",
           not any(c in (acts[0] if acts else "") for c in
                   ("reseed-cross-seed", "reseed-drive-loop", "reseed-prowlarr", "reseed-flaresolverr")),
@@ -585,15 +591,15 @@ finally:
 _src8 = SRC.read_text(encoding="utf-8")
 _containers_line = next((ln for ln in _src8.split("\n")
                          if ln.startswith("CONTAINERS=")), "")
-check("★ 静态：`CONTAINERS=` 那一行**不含** qbittorrent-reseed（否则会用错目录 up 它）",
-      "qbittorrent-reseed" not in _containers_line, repr(_containers_line))
-check("★ 静态：另有 `CONTAINERS_QB=` 且含 qbittorrent-reseed",
-      any(ln.startswith("CONTAINERS_QB=") and "qbittorrent-reseed" in ln
+check("★ 静态：`CONTAINERS=` 那一行**不含** qbit-reseed*（否则会用错目录 up 它）",
+      "qbit-reseed" not in _containers_line, repr(_containers_line))
+check("★ 静态：另有 `CONTAINERS_QB=` 且含 qbit-reseed1..4",
+      any(ln.startswith("CONTAINERS_QB=") and "qbit-reseed1" in ln
           for ln in _src8.split("\n")), "缺少 CONTAINERS_QB 声明")
 # 阴性对照：上述静态判据不是恒真 —— 造一行错的必须判红
-_probe8 = 'CONTAINERS="reseed-cross-seed qbittorrent-reseed"'
+_probe8 = 'CONTAINERS="reseed-cross-seed qbit-reseed1"'
 check("★ 对照：把 qb 混进 CONTAINERS 的那一行**判得红**",
-      "qbittorrent-reseed" in _probe8 and not _probe8.startswith("CONTAINERS_QB="),
+      "qbit-reseed" in _probe8 and not _probe8.startswith("CONTAINERS_QB="),
       "判据恒真 ⇒ 它什么也没钉住")
 
 # =====================================================================

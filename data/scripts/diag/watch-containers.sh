@@ -56,8 +56,8 @@
 #
 # ★★ 盯哪些容器（**数量以 `CONTAINERS` + `CONTAINERS_QB` 两处声明为准，别在正文里抄**）
 #   · **项目 A**（本项目 compose）：`restart: unless-stopped` 的 4 个常驻服务；
-#   · **项目 B**（另一个 compose，`qbittorrent-reseed`）：1 个，2026-10-01 加。
-#   ⇒ 共 5 个。为什么不盯 `reseed-orchestrator` / `reseed-autoheal` 见 CONTAINERS 处。
+#   · **项目 B**（另一个 compose，`qbit-reseed1..4`）：4 个，2026-10-01 加 / 2026-10-06 扩。
+#   ⇒ 共 8 个。为什么不盯 `reseed-orchestrator` / `reseed-autoheal` 见 CONTAINERS 处。
 #
 # ★★ 验证状态（2026-09-28，**别把本机验过当成已上线**）
 #   ✅ 本机验过（假 docker，`--selftest-live`）：四种退出码 0/0/1/2 各有正例；
@@ -66,7 +66,7 @@
 #       —— 通知写侧已于 2026-10-05 砍掉，那条验证随之作废。）
 #   ✅ 对着 **NAS 的 `compose.yaml`** 核过：本栈六个 `container_name` 里只盯
 #      `restart: unless-stopped` 的**四个**常驻服务（另两个为何不盯见下面 CONTAINERS 处）；
-#      ★ 2026-10-01 又加了**项目 B**的 `qbittorrent-reseed`（见 CONTAINERS_QB 处）。
+#      ★ 2026-10-01 又加了**项目 B**的 `qbit-reseed1..4`（见 CONTAINERS_QB 处）。
 #   ⛔ **还没上过 NAS** ⇒ 以下**未验**（都是真机才能证的）：
 #      ① 真 `docker inspect` 的字段形状（`State.Status/Pid/ExitCode/Health.Status`）——
 #         夹具是我按文档造的，可能与真 daemon 有出入；
@@ -109,11 +109,11 @@ FAKE_DOCKER="${FAKE_DOCKER:-}"
 #     退出码为 0，看日志只有一行报错）。⇒ 与 `FAKE_DOCKER` 同一处置。
 WATCH_EXPECT_DAEMON="${WATCH_EXPECT_DAEMON:-}"
 
-# ★★ 第二组容器：`qbittorrent-reseed` —— **不在**本项目（COMPOSE_DIR）的 compose 里，
+# ★★ 第二组容器：`qbit-reseed1..4` —— **不在**本项目（COMPOSE_DIR）的 compose 里，
 #   它在**另一个 compose 项目**（自己的目录）。两个致命理由，所以**不能**并进上面
 #   `CONTAINERS`：
 #     ① 动作用 `cd "$COMPOSE_DIR" && docker compose up -d <服务名>`。qb 的服务不在
-#        本项目里 ⇒ 会报 `no such service: qbittorrent-reseed`（就是 §32.3 ⑤
+#        本项目里 ⇒ 会报 `no such service: qbit-reseed1`（就是 §32.3 ⑤
 #        「容器名 vs 服务名」那条的同族，往上再错一层）。⇒ 必须在**它自己的目录**里 up。
 #     ② 本项目那条 up 带 `--profile drive-loop`，而 qb 那栈**没有 profile**（标志无意义，
 #        但会误导读的人以为用它管 profile）。
@@ -126,7 +126,7 @@ WATCH_EXPECT_DAEMON="${WATCH_EXPECT_DAEMON:-}"
 #      跨项目依赖 compose 的 `depends_on` 表达不了 ⇒ 由**本脚本的顺序**来编码。
 #      ★ 这条顺序**必须**有断言钉住（见 tests/test_watch_containers.py），
 #        只写在注释里 = 只是注释，不是保证。
-COMPOSE_DIR_QB="${COMPOSE_DIR_QB:-/volume2/docker_ssd/qbittorrent-reseed}"
+COMPOSE_DIR_QB="${COMPOSE_DIR_QB:-/volume2/docker_ssd/qbit-reseed}"
 # ★ 项目 B 无 profile ⇒ 显式空串（不继承 COMPOSE_PROFILE）。别删这一行：
 #   它让"为什么第二条 up 不带 --profile"在代码里可见，而不是靠读注释回忆。
 COMPOSE_PROFILE_QB=""
@@ -271,13 +271,55 @@ CONTAINERS="reseed-cross-seed reseed-drive-loop reseed-prowlarr reseed-flaresolv
 #     动作用**服务名**（compose 认的就是它）。
 CONTAINER_SERVICE_MAP="reseed-cross-seed=cross-seed reseed-drive-loop=drive-loop reseed-prowlarr=prowlarr reseed-flaresolverr=flaresolverr"
 
-# ★★ 第二组：项目 B（qbittorrent-reseed）。**容器名 = 服务名**（同名），
+# ★★ 第二组：项目 B（qbit-reseed1..4）。**容器名 = 服务名**（同名），
 #   但仍**显式**写进对照表 —— 不做"去掉 reseed- 前缀"那类猜测（同上一条理由）。
-#   NAS 现场核对（2026-10-01）：
-#       docker inspect qbittorrent-reseed --format '{{.Config.Labels}}'
-#       ⇒ com.docker.compose.service = qbittorrent-reseed   （= 容器名）
-CONTAINERS_QB="qbittorrent-reseed"
-CONTAINER_SERVICE_MAP_QB="qbittorrent-reseed=qbittorrent-reseed"
+#   NAS 现场核对（2026-10-01 / 2026-10-06 扩容）：
+#       docker inspect qbit-reseed1 --format '{{.Config.Labels}}'
+#       ⇒ com.docker.compose.service = qbit-reseed1   （= 容器名）
+CONTAINERS_QB="qbit-reseed1 qbit-reseed2 qbit-reseed3 qbit-reseed4"
+CONTAINER_SERVICE_MAP_QB="qbit-reseed1=qbit-reseed1 qbit-reseed2=qbit-reseed2 qbit-reseed3=qbit-reseed3 qbit-reseed4=qbit-reseed4"
+
+# ★★★ R3（2026-10-06）：**qb 探活**（补 §5.5.2 坐实的盲点 —— "容器在跑、qb 死在容器里"）
+#   ─────────────────────────────────────────────────────────────────────
+#   现状：本脚本只看 **容器** 在不在跑。而 qb 的 s6 会在**容器内**重启 qb 进程 ⇒
+#         容器**不退出** ⇒ 探活永远说 "running（pid=旧值）" ⇒ qb 真死了也报绿。
+#         证据链《NAS-qB三实例OOM证据链》§5.5.2：2026-10-06 开机 8.3h 内 OOM-kill 15 次，
+#         每次 s6 容器内重启 qb，容器状态始终 running。
+#   ⇒ 本段用一个 **python3 stdlib** 探针直接问 qb 的 WebUI API（`/api/v2/app/version`），
+#     把"容器 running"升级成"容器 running **且 qb 应答**"。
+#
+#   ★★ 三条硬约束（F5/F6/F7，是本地基，别改）：
+#     ① **无 curl**：NAS 上不一定有 curl ⇒ 用 `$PY`（stdlib urllib）打 HTTP。
+#     ② **容器内 127.0.0.1 ≠ 宿主**：本脚本跑在 watcher 容器里，而三个 qb 是
+#        **宿主**上的另一个栈 ⇒ 探 127.0.0.1:<port> 探的是**watcher 自己**。
+#        必须走**宿主网关** `172.17.0.1`（docker 默认 bridge 网关）→ 宿主 →
+#        宿主上监听的 3020/3060/8085。
+#     ③ **8085 也要探**：套件版 qb（Synology 原生包）不在 docker 里，但同样会 OOM
+#        ⇒ 三个实例（3020 opencd / 3060 reseed / 8085 套件版）一个都不能漏。
+#
+#   ★★ 为什么**不**引入 `QB_STATE_DIR`（本文件第 90 行的纪律）：
+#     "冷却状态用**文件名**记…不写新的状态文件 —— 少一个要挂载的路径"。
+#     ⇒ 探活只做"进程/服务/数据"三层，**全部无状态**（每次现探现判），不新开挂载点。
+#     （原 diff 里的 `QB_STATE_DIR=$NOTIFY_ROOT/state` 行**已删** —— 见评审定案 D2。）
+QB_PROBE_GATEWAY="${QB_PROBE_GATEWAY:-172.17.0.1}"
+# ★★ 实测（2026-10-06，从 watcher 容器内探宿主 qb，只读）：
+#     · watcher 自己的网关是 `172.30.0.1`（`reseed_reseed-net`）——
+#       它能到 3020/3060，**但到不了 8085**（套件版 qb 只绑在 docker0 网关那侧）。
+#     · `172.17.0.1`（docker0 默认桥）**三个都到**（3020/3060/8085 全 200）。
+#     · `192.168.0.7`（NAS LAN IP）三个都**到不了**（宿主防火墙拦）。
+#   ⇒ 默认用 `172.17.0.1`；并把**候选列表**都试一遍（哪个连通用哪个），
+#     免得某天某个 qb 换了绑定接口就"看着绿/看着死"。
+QB_PROBE_GATEWAYS="${QB_PROBE_GATEWAYS:-172.24.0.1 $QB_PROBE_GATEWAY 172.30.0.1}"
+QB_PROBE_TIMEOUT="${QB_PROBE_TIMEOUT:-5}"
+# ★ 探哪些实例：`name:port:confpath`（**空格分隔**，POSIX sh 无数组）。
+#   ★★ 凭据来源（2026-10-06 定）：**从每个 qb 自己的 `qBittorrent.conf` 读 `WebUI\APIKey`**，
+#      而不是往 `.env` 里再抄一份 —— 凭据**留在它原本的家**、本脚本**只读不落盘**，
+#      且**绝不打印**（凭据纪律：不打印、不进 env 快照、不写第二份）。
+#      这三份 conf 由 compose **只读**挂进 watcher（见 compose 的 watcher.volumes ④⑤⑥）。
+#   ★★ 默认值用 `${VAR-…}`（**只在未设时**取默认），**不是** `${VAR:-…}`（未设**或空**）。
+#      区别很重要：**显式传空串 `QB_PROBE_INSTANCES=` ⇒ 探活整段跳过**（零实例）。
+#      离线自测就靠这一手（否则探针会真去连网关、整轮测试挂住）；生产上不传即用默认。
+QB_PROBE_INSTANCES="${QB_PROBE_INSTANCES-reseed1:3320:/qbconf/reseed1/qBittorrent.conf reseed2:3340:/qbconf/reseed2/qBittorrent.conf reseed3:3360:/qbconf/reseed3/qBittorrent.conf reseed4:3380:/qbconf/reseed4/qBittorrent.conf}"
 
 #: 容器名 → 服务名。查不到就原样返回（宁可按原名试，也不要静默发一个空命令）。
 svc_of() {
@@ -599,6 +641,81 @@ if [ "$DAEMON_DOWN" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------ #
+# qb 探活（容器在跑 ≠ qb 活着）—— 见 CONTAINERS_QB 后那段长注
+# ------------------------------------------------------------------ #
+# ★ 判据三层，缺一不可（读数一样、含义相反是本仓最忌的）：
+#     ① 容器 running（上面已判）
+#     ② qb WebUI **应答** `/api/v2/app/version`（本段）
+#     ③ 版本号能解析出来（本段：打印 `OK vX.Y.Z n=<种子数>`）
+#   ⇒ 任一层红 ⇒ `down` 上屏 + `N_QB_BAD++`（收尾并入退出码，见 D1）。
+# ★★ 本段**无状态**：每次现探现判，不写 `state/`（见上面纪律）。
+# ★★ 探活也**照跑 dry-run**：dry-run 是"不改**容器**"，不是"不**查**"——
+#    探活纯只读，正应当照跑（原 diff 里那句 `if [ "$DRY" = 0 ]; then :; fi` 是空操作，已删）。
+echo "--- qb 探活（容器在跑 ≠ qb 活着）---"
+N_QB_BAD=0
+if [ -z "$PY" ]; then
+    # 上面 `[ -z "$PY" ]` 分支已 exit 2；这里只是防御性兜底。
+    na "没有 python ⇒ 探不了 qb（**未验**）"
+    N_QB_BAD=$((N_QB_BAD + 1))
+else
+    for _inst in $QB_PROBE_INSTANCES; do
+        _name=${_inst%%:*}
+        _rest=${_inst#*:}
+        _port=${_rest%%:*}
+        _conf=${_rest#*:}
+        # ★★ 修法 A（2026-10-10 T-08b）：不再读 APIKey、不再带 Authorization。
+        #   原因：qB 5.2.4 的 WebUI\AuthSubnetWhitelist 已放行 172.24.0.0/16 / 172.17.0.0/16
+        #   ⇒ 白名单网关来的请求免认证即可（实测无 key 探测 5 实例全 200 v5.2.4）。
+        #   反之硬传 Bearer <conf 里的 key> 会被判 403（key 与运行时不一致）。
+        _conf=""
+        _probe=""
+        # ★ 依次试候选网关，第一个答 `OK` 的即采用（见 QB_PROBE_GATEWAYS 的长注）。
+        for _gw in $QB_PROBE_GATEWAYS; do
+            _probe=$("$PY" - "$_gw" "$_port" "$QB_PROBE_TIMEOUT" <<'PYEOF' 2>/dev/null
+import sys, json, urllib.request
+gw, port, tmo = sys.argv[1], sys.argv[2], float(sys.argv[3])
+base = "http://%s:%s/api/v2" % (gw, port)
+def _get(path):
+    # 修法 A：不带 Authorization（依赖 AuthSubnetWhitelist 放行白名单网关）
+    with urllib.request.urlopen(base + path, timeout=tmo) as r:
+        return r.read().decode("utf-8", "replace")
+try:
+    ver = _get("/app/version").strip()          # ② WebUI 应答
+except Exception as e:                           # noqa: BLE001
+    print("DEAD\t%s" % type(e).__name__); raise SystemExit(0)
+# ③ 顺带取种子数。★ 实测（qB 5.2.4）：`/torrents/count` 回**裸整数**（如 `2980`），
+#    不是 `{"count":N}` ⇒ 兼容两种（先试 int，再试 JSON 的 count 字段）。
+try:
+    raw = _get("/torrents/count").strip()
+    try:
+        cnt = int(raw)
+    except ValueError:
+        cnt = json.loads(raw).get("count", "?")
+except Exception:                                # noqa: BLE001
+    cnt = "?"                                    # 版本拿到了；条数拿不到不算死
+print("OK\t%s n=%s" % (ver, cnt))
+PYEOF
+)
+            case "$_probe" in OK*) _probe="OK	${_probe#OK	} (via $_gw)"; break ;; esac
+        done
+        case "$_probe" in
+            OK*)   ok "qb:$_name  ${_probe#OK	}" ;;
+            DEAD*)
+                _why=${_probe#DEAD	}
+                # ★ 这里用 `down`（✗ 醒目）**且**抬 `N_QB_BAD` —— 见评审定案 D1：
+                #   qb 级红**独立成计数**，收尾并入退出码，不与容器级 `RC` 混。
+                down "qb:$_name  **API 不可达**（$_why）—— 容器在跑，但 qb 没应答"
+                say "     ↳ 多半是 qb 被 OOM-kill、s6 正在容器内重启（见 OOM 证据链 §5.5）。"
+                N_QB_BAD=$((N_QB_BAD + 1)) ;;
+            *)
+                na "qb:$_name  探针无输出 ⇒ **未验**"
+                N_QB_BAD=$((N_QB_BAD + 1)) ;;
+        esac
+    done
+fi
+echo
+
+# ------------------------------------------------------------------ #
 # 动作：拉起
 # ------------------------------------------------------------------ #
 if [ "$DAEMON_DOWN" = 1 ]; then
@@ -635,7 +752,7 @@ else
         bad "找不到 compose 命令（docker compose / docker-compose 都没有）⇒ 拉不起来"
         say "  手工核对： $DOCKER ps -a   然后在 $COMPOSE_DIR 里 up -d"
     else
-        # ---- 第一步：项目 B（qbittorrent-reseed）—— **必须先于**项目 A ----
+        # ---- 第一步：项目 B（qbit-reseed1..4）—— **必须先于**项目 A ----
         #   ★★ 这是跨项目依赖的**唯一**编码处：qb 起来前，cross-seed 会 exit 0 空转重启。
         #   ★ 不带 `--profile`（项目 B 无 profile，见 COMPOSE_PROFILE_QB）。
         if [ -n "$NEED_UP_SVC_QB" ]; then
@@ -748,9 +865,16 @@ fi
 # 收尾
 # ------------------------------------------------------------------ #
 echo "============================================================"
-if [ "$RC" -eq 0 ] && [ "$UNK" -eq 0 ]; then
+# ★★★ R3（2026-10-06）：第一支多一个条件 `&& [ "$N_QB_BAD" -eq 0 ]`（评审定案 D1）。
+#   动机：`N_QB_BAD>0` 而**容器级全绿**（正是本改法要抓的场景 —— qb 死在容器里）
+#   时，原判据 `RC=0 && UNK=0` 会**第一支就命中并 exit 0**，永远走不到那个
+#   `elif [ "$RC" -ne 0 ]` ⇒ qb 级红**被吞掉**、退出码照旧全绿。
+#   ⇒ 把 qb 级红并进**第一支**的判据（语义清晰：qb 级红独立于容器级 RC）。
+#   ★ 下方 `elif [ "$N_QB_BAD" -gt 0 ]` 是新增的**专门**分支 —— 让 qb 级红有自己的
+#     退出码文案（不是笼统的"有不通过项"）。
+if [ "$RC" -eq 0 ] && [ "$UNK" -eq 0 ] && [ "$N_QB_BAD" -eq 0 ]; then
     if [ "$N_BAD" -eq 0 ]; then
-        echo "★ 全部容器都在跑 —— 没有要做的事。"
+        echo "★ 全部容器都在跑、三个 qb 都应答 —— 没有要做的事。"
     elif [ "$DRY" = 1 ]; then
         # ★ dry-run 什么都**没做** —— 别说成「已拉起」（本机自测：这句曾把 dry-run
         #   念成已处理，与 473 行那句差之毫厘、含义相反）。
@@ -761,6 +885,12 @@ if [ "$RC" -eq 0 ] && [ "$UNK" -eq 0 ]; then
         echo "  ★ 但「拉起来过」本身是信号：去看 docker logs 找**为什么会停**。"
     fi
     exit 0
+elif [ "$N_QB_BAD" -gt 0 ] && [ "$RC" -eq 0 ] && [ "$UNK" -eq 0 ]; then
+    # ★★★ 专门给 qb 级红（容器全绿、qb 没应答）—— 退出码 1，文案点明是 qb 不是容器。
+    echo "★★ 容器都在跑，但**有 $N_QB_BAD 个 qb 实例没应答**（上面 ✗ qb:<name>）——" >&2
+    echo "   ★ 这是「容器在、qb 死」（s6 在容器内重启 qb 的典型症状；见 OOM 证据链 §5.5）。" >&2
+    echo "   ★ 查： docker logs <容器>; 宿主 dmesg | grep -i 'qbittorrent\\|oom'" >&2
+    exit 1
 elif [ "$RC" -ne 0 ]; then
     echo "★★ 有不通过项（上面 ✗）—— 见上面的排查提示。" >&2
     exit 1

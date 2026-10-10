@@ -2,13 +2,13 @@
 # split-seed（大包拆包 · 单种保种）—— 服务栈
 #   prowlarr        : 把你的 PT 站变成 Torznab，供 cross-seed 搜索
 #   flaresolverr    : (可选) 过 Cloudflare，中文 NexusPHP 站常需要
-#   cross-seed      : 按内容匹配单种 → 在 linkDir 建硬链接 → 注入 :3060
+#   cross-seed      : 按内容匹配单种 → 在 linkDir 建硬链接 → 注入 :3320
 #   reseed-orchestrator : 我们写的编排器(一次性 CLI)，预检/驱动/汇报
 #
-# 注意：qbittorrent-reseed(:3060) 由它自己的 compose 单独运行，不在本栈内。
-#       本栈**接入它所在的 docker 网络**(qbit-net = qbittorrent-reseed_default)，
-#       用服务名直连 http://qbittorrent-reseed:3060。
-#       ★ 不要改回 http://${NAS_IP}:3060 —— 群晖上「容器 → 宿主机 LAN IP → DNAT 回
+# 注意：qbit-reseed1..4 由它自己的 compose 单独运行，不在本栈内。
+#       本栈**接入它所在的 docker 网络**(qbit-net = qbnet)，
+#       用服务名直连 http://qbit-reseed1:3320。
+#       ★ 不要改回 http://${NAS_IP}:3320 —— 群晖上「容器 → 宿主机 LAN IP → DNAT 回
 #         另一容器」会 timeout（2026-09-11 实测）。
 #       （宿主机上跑的 drive-loop.py 走的是另一条路：LAN IP + 端口映射；
 #         两边是**故意不同**的，别互相纠正。）
@@ -90,10 +90,13 @@ services:
       - TZ=${TZ}
       - CONFIG_DIR=/config
       # 供 cross-seed/config.js 读取（见该文件顶部说明）
-      # qbittorrent-reseed 在它自己 compose 栈的网络里（qbittorrent-reseed_default）。
+      # qbit-reseed1 在它自己 compose 栈的网络里（qbnet）。
       # 本服务已接入该网络(qbit-net)，用服务名直连；不要改回 ${NAS_IP}，群晖上
       # 「容器→宿主机 LAN IP→DNAT 回另一容器」的回环会 timeout（2026-09-11 实测）。
-      - QBIT_URL=http://qbittorrent-reseed:3060
+      - QBIT_URL=http://qbit-reseed1:3320
+      - WAIT_QB_URL=http://qbit-reseed1:3320
+      # ★ #79：第二个 qB（reseed2）——config.js 的 torrentClients 读 QBIT_URL_CRED_2
+      - QBIT_URL_2=http://qbit-reseed2:3340
       - TORZNAB_URLS=${TORZNAB_URLS}
       - DATA_DIRS=${DATA_DIRS}
       - LINK_DIR=${LINK_DIR}
@@ -103,7 +106,7 @@ services:
       - QBIT_CATEGORY=${QBIT_CATEGORY}
       - CROSSSEED_API_KEY=${CROSSSEED_API_KEY}
     # ★★ 不直接起 daemon —— 改走**启动闸门**（见 cross-seed/wait-for-qb.sh）：
-    #   先等 qbittorrent-reseed 就绪再起 daemon，吸收「daemon 启动时必须登录 qB 校验配置」
+    #   先等 qbit-reseed1 就绪再起 daemon，吸收「daemon 启动时必须登录 qB 校验配置」
     #   与「qb 在另一个 compose 项目、depends_on 跨不了项目」之间的竞态。
     #   不做这层的后果：qb 未就绪 ⇒ daemon 重试 6×60s ⇒ exit 0 ⇒ restart 拉起 ⇒ **无限重启循环**
     #   （`ERR-DOCKER-13`，2026-10-01 实测 `RestartCount=44`）。闸门脚本**带硬超时、绝不无限挂起**。
@@ -131,10 +134,13 @@ services:
     #   ★ 这是**我们自己的 compose** 的改动，**不碰 qB 的 conf**（用户硬约束）。
     #   ★ 反向：`wait-for-qb.sh` 会真登录校验（`QBIT_URL_CRED`），一旦某 IP 被封它只会
     #     "继续等"到 300s 超时 —— 所以固定 IP 也便于**人一眼看出**是哪个地址被封。
+    # ★ #79：不再钉静态 IP —— 用内嵌凭据自登录（首登即成功，无封 IP 风险）；
+    #   qbnet 是 external 网络，compose 无法为它指定 ipv4_address（Docker 报
+    #   "user specified IP address is supported only when connecting to networks
+    #    with user configured subnets"）。让 Docker 自动分配即可。
     networks:
       reseed-net: {}
-      qbit-net:
-        ipv4_address: 172.29.0.10
+      qbit-net: {}
     logging: *logging-limits
     restart: unless-stopped
 
@@ -244,10 +250,10 @@ services:
   #
   # ★ 网络要**两个** —— 和 `cross-seed` 同形，别猜网络名
   # ------------------------------------------------
-  #   `cross-seed` / `prowlarr` 在 `reseed-net`；`qbittorrent-reseed` 在 `qbit-net`
-  #   （=`qbittorrent-reseed_default`，external）。两条缺一不可：
+  #   `cross-seed` / `prowlarr` 在 `reseed-net`；`qbit-reseed1..4` 在 `qbit-net`
+  #   （=`qbnet`，external）。两条缺一不可：
   #   少了 reseed-net 连不上 `cross-seed:2468`，少了 qbit-net 连不上
-  #   `qbittorrent-reseed:3060`。★ 别改成 `${NAS_IP}` —— 群晖上
+  #   `qbit-reseed1:3320`。★ 别改成 `${NAS_IP}` —— 群晖上
   #   「容器 → 宿主机 LAN IP → DNAT 回另一容器」会 timeout（README 坑 4）。
   #
   # ★ 接线与迁移状态：README「还没做」第 15 条 + `summary/26-...md` §26.5
@@ -329,7 +335,7 @@ services:
       #      ★ 这正是 `A.11` 那个形状（"参数看着生效、其实没生效"）；逮住它的是
       #        `tests/test_drive_loop_service.py` ①k 那条**逐条**挂载断言。
       - DRIVE_LIMIT=${DRIVE_LIMIT:-500}
-      # ★★ 2026-10-04：qB 的 API Key —— 只读访问 :3060 用（`Authorization: Bearer`）。
+      # ★★ 2026-10-04：qB 的 API Key —— 只读访问 :3320 用（`Authorization: Bearer`）。
       #   本服务读 qB（回灌 / 卡999 / 卡种 / IYUU / 链接守护）走 `state._qbit_*`，
       #   那些函数现在会带上这个头（见 `orchestrator/state.py::_qb_auth_header`）。
       #   ★ `env_file: [.env]` 其实已经带进来了，这里显式写一条是**为了能被搜到/读见**。
@@ -540,11 +546,16 @@ services:
       #     写侧已删 ⇒ 默认改 `0`，让巡检专注"拉起"这一件事。
       #   ★ 判据：`NOTIFY` 只管「投不投告警」，**不管「拉不拉」** —— 两者分开取证。
       - NOTIFY=${NOTIFY:-0}
-      # ★★ 2026-10-01：项目 B（qbittorrent-reseed）的 compose 目录 —— 看护器现在也盯
-      #   `qbittorrent-reseed`（它原不在本栈，停摆 3h47m 没人拉起）。两条 `up -d` 要在
+      # ★★ 2026-10-01：项目 B（qbit-reseed）的 compose 目录 —— 看护器现在也盯
+      #   `qbit-reseed`（它原不在本栈，停摆 3h47m 没人拉起）。两条 `up -d` 要在
       #   **各自的目录**里跑（项目 A 有 profile、项目 B 没有），故两个目录都要挂进去。
       #   与下面 ③ 同一条规则：**与宿主完全相同**的路径。
-      - WATCH_COMPOSE_DIR_QB=/volume2/docker_ssd/qbittorrent-reseed
+      - WATCH_COMPOSE_DIR_QB=/volume2/docker_ssd/qbit-reseed
+      # ★★ R3（2026-10-06）：qb 探活参数（见 watch-containers.sh「qb 探活」段）。
+      #   ★ 网关候选：watcher 自己的网关能到 3020/3060 但**到不了 8085**；
+      #     `172.17.0.1`（docker0）三个都到 ⇒ 列表挨个试，第一个通即用。
+      - QB_PROBE_GATEWAYS=172.24.0.1 172.17.0.1
+      - QB_PROBE_TIMEOUT=5
     volumes:
       # ① socket（只读，与 autoheal 同规格）
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -557,7 +568,15 @@ services:
       # ④ ★★ 2026-10-01：项目 B 的 compose 目录，**同路径**挂载（同 ③ 的规则）。
       #   不挂它 ⇒ 脚本第 431 行的 `COMPOSE_FILE_QB` 探测恒失败 ⇒ 每趟报"找不到 compose 文件"，
       #   而 qb 真停了时**拉不起来**。这是"看着绿其实没能力"的典型（A.11 / B.10 第 14 条）。
-      - /volume2/docker_ssd/qbittorrent-reseed:/volume2/docker_ssd/qbittorrent-reseed
+      - /volume2/docker_ssd/qbit-reseed:/volume2/docker_ssd/qbit-reseed
+      # ④⑤⑥ ★★ R3（2026-10-06）：三个 qb 的 conf **只读**挂进来 —— 探活从各自 conf 读
+      #   `WebUI\APIKey`（凭据**留在原地**、不落第二份、不打印）。挂**文件**（不是整个
+      #   配置目录）⇒ 最小暴露面。缺任一个 ⇒ 该实例探活判『未验』（不是『qb 坏了』）。
+      - /volume2/docker_ssd/qbit-reseed/config1/qBittorrent/qBittorrent.conf:/qbconf/reseed1/qBittorrent.conf:ro
+      - /volume2/docker_ssd/qbit-reseed/config2/qBittorrent/qBittorrent.conf:/qbconf/reseed2/qBittorrent.conf:ro
+      - /volume2/docker_ssd/qbit-reseed/config3/qBittorrent/qBittorrent.conf:/qbconf/reseed3/qBittorrent.conf:ro
+      - /volume2/docker_ssd/qbit-reseed/config4/qBittorrent/qBittorrent.conf:/qbconf/reseed4/qBittorrent.conf:ro
+      - /volume2/docker_ssd/qbit-publish/config/qBittorrent/qBittorrent.conf:/qbconf/publish/qBittorrent.conf:ro
     working_dir: /volume2/docker_ssd/reseed
     # ★ 入口是那个循环；`sh` 显式写出（镜像的 entrypoint 不保证有 sh 之外的假设）。
     #    ★ 2026-10-05（B2）：脚本收进 `data/scripts/diag/` ⇒ `working_dir` 下的相对路径随之加 `data/`。
@@ -568,9 +587,9 @@ services:
 networks:
   reseed-net:
     driver: bridge
-  # qbittorrent-reseed 由它自己的 compose 栈创建的网络，这里以 external 接入，
-  # 使 cross-seed / 编排器能用服务名直连 :3060（源 IP 为 172.x，已被 qB 的
+  # qbit-reseed 由它自己的 compose 栈创建的网络，这里以 external 接入，
+  # 使 cross-seed / 编排器能用服务名直连 :3320（源 IP 为 172.x，已被 qB 的
   # AuthSubnetWhitelist 172.16.0.0/12 覆盖）。
   qbit-net:
     external: true
-    name: qbittorrent-reseed_default
+    name: qbnet

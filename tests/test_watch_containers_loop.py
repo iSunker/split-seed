@@ -82,7 +82,11 @@ ALL_OK = ('[{"Name":"/reseed-cross-seed","State":{"Status":"running","Running":t
           '{"Name":"/reseed-prowlarr","State":{"Status":"running","Running":true,"Pid":13,"ExitCode":0}},'
           '{"Name":"/reseed-flaresolverr","State":{"Status":"running","Running":true,"Pid":14,"ExitCode":0}},'
           # ★ 2026-10-01：项目 B 的 qb 也必须"在跑" —— 否则"全在跑"用例会看见它 missing 去拉它。
-          '{"Name":"/qbittorrent-reseed","State":{"Status":"running","Running":true,"Pid":15,"ExitCode":0}}]')
+          #   ★ 2026-10-06（R3）：qb 扩成四个 qbit-reseed1..4，四个都要在跑。
+          '{"Name":"/qbit-reseed1","State":{"Status":"running","Running":true,"Pid":15,"ExitCode":0}},'
+          '{"Name":"/qbit-reseed2","State":{"Status":"running","Running":true,"Pid":16,"ExitCode":0}},'
+          '{"Name":"/qbit-reseed3","State":{"Status":"running","Running":true,"Pid":17,"ExitCode":0}},'
+          '{"Name":"/qbit-reseed4","State":{"Status":"running","Running":true,"Pid":18,"ExitCode":0}}]')
 
 #: 一个停了，且**拉不起来**（compose 文件缺失 ⇒ rc=1）
 DL_EXITED = ('[{"Name":"/reseed-cross-seed","State":{"Status":"running","Running":true,"Pid":11,"ExitCode":0}},'
@@ -130,6 +134,10 @@ class Lab:
         e = dict(os.environ)
         e.update(LAB_FIX=str(self.fix), LAB_CALLS=str(self.calls),
                  FAKE_DOCKER=str(self.docker),
+                 # ★★ R3（2026-10-06）：被循环拉起的 watch-containers.sh 新增 qb 探活。
+                 #   离线自测**必须**清空实例清单（显式空串 ⇒ 探活整段跳过），否则探针会
+                 #   真去连 172.24.0.1 等网关 ⇒ 每轮 60s+ ⇒ 整个测试挂住（rc=124）。
+                 QB_PROBE_INSTANCES="",
                  PATH=str(self.d) + os.pathsep + os.environ.get("PATH", ""))
         return e
 
@@ -272,7 +280,7 @@ try:
     check("  ↳ 且循环自己的头里也报了 compose-qb",
           "compose-qb" in r.stdout, (r.stdout or "")[:400])
     # 阴性对照：判据的反面（默认 NAS 路径）必须判红 —— 防"恒真"
-    _default = "/volume2/docker_ssd/qbittorrent-reseed"
+    _default = "/volume2/docker_ssd/qbit-reseed"
     _would_pass = (_default in _default) and ("/volume2/" not in _default)
     check("★★ 对照：默认 NAS 路径喂进同一判据 ⇒ **判得红**（判据非恒真）",
           not _would_pass, "判据恒真 ⇒ 它什么也没钉住")
