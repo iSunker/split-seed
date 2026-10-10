@@ -35,9 +35,12 @@
 #       而且 `--once` 那条路的**跨进程闸门**（`.drive-loop.state` 的 pid + 心跳、
 #       以及 `last_sleep_sec` 的批次间隔）会被反复走一遍 —— 站点退避时算出来的
 #       1.5~2 小时在这里会退化成"每批都跑"。
-#   (b) **传** `--url http://cross-seed:2468 --qbit-url http://qbittorrent-reseed:3060`
+#   (b) **传** `--url http://cross-seed:2468 --qbit-url http://qbit-reseed1:3320`
 #       —— 容器内必须**服务名直连**。群晖上「容器 → 宿主 LAN IP → DNAT 回另一容器」
 #       这条回环实测 **timeout**（记录在 `compose.yaml` 头部与 README 坑 4）。
+#       ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 →
+#         qbit-reseed1:3320（+ 2/3/4）。这里必须跟着改，否则**显式传的旧名会
+#         覆盖 drive-loop.py 里的默认值** —— 实跑就指向一个不存在的容器。
 #       ★ TORZNAB 那侧**不用改**：`TORZNAB_URLS` 实测已经是
 #         `http://prowlarr:9696/N/api?apikey=...`（服务名），照旧可用。
 #   (c) `PY=python` / `SUDO=` —— 镜像（`python:3.12-slim`）里没有 `/usr/bin/python3`
@@ -289,7 +292,7 @@ fi
 RC=0
 "$PY" "$SCRIPT" \
   --url "http://cross-seed:2468" \
-  --qbit-url "http://qbittorrent-reseed:3060" \
+  --qbit-url "http://qbit-reseed1:3320" \
   --env "$COMPOSE_DIR/.env" \
   --indexers HDtime,HDFans,NanyangPT,BTSCHOOL \
   --limit "${DRIVE_LIMIT:-500}" \

@@ -2988,8 +2988,10 @@ def main() -> int:
     ap.add_argument("--db", default=DEFAULT_DB)
     ap.add_argument("--db-path", dest="db_path")
     ap.add_argument("--url", default="http://192.168.0.7:2468")
-    ap.add_argument("--qbit-url", dest="qbit_url", default="http://192.168.0.7:3060",
-                    help="qB :3060 地址（回灌必需，否则 SEEDING 会被误降级）")
+    # ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 → qbit-reseed1:3320
+    #   （+ 2/3/4）。容器内走**服务名**直连；宿主/Windows 用 192.168.0.7:3320。
+    ap.add_argument("--qbit-url", dest="qbit_url", default="http://qbit-reseed1:3320",
+                    help="qB :3320 地址（回灌必需，否则 SEEDING 会被误降级）")
     ap.add_argument("--category", default="reseed-singles")
     ap.add_argument("--log", action="append", default=None,
                     help="cross-seed 日志路径（回灌用，可多次；默认用 NAS 上的 info.current.log）")

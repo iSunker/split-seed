@@ -465,7 +465,8 @@ ck("★★ ③b 参数区段里有 --url 与 --qbit-url（容器内必须服务�
    "群晖上『容器→宿主 LAN IP→DNAT』timeout）",
    "--url" in _ARGV and "--qbit-url" in _ARGV, _ARGV.strip())
 ck("③c 两个 URL 是**服务名**，不是 ${NAS_IP} / 局域网 IP",
-   "http://cross-seed:2468" in _ARGV and "http://qbittorrent-reseed:3060" in _ARGV,
+   # ★ 2026-10-06：保种实例改名/多实例，旧 qbittorrent-reseed:3060 → qbit-reseed1:3320。
+   "http://cross-seed:2468" in _ARGV and "http://qbit-reseed1:3320" in _ARGV,
    _ARGV.strip())
 ck("③d 带 --env \"$COMPOSE_DIR/.env\"（TORZNAB 那几个 apikey 的来源）",
    '--env "$COMPOSE_DIR/.env"' in _ARGV, _ARGV.strip())
