@@ -122,9 +122,14 @@ module.exports = {
   //   ★ 用**服务名** `qbittorrent-reseed` 直连；**别**换成 ${NAS_IP}——
   //     群晖上「容器→宿主机 LAN IP→DNAT 回另一容器」的回环会 timeout（2026-09-11 实测）。
   //   ★ 取值优先级：QBIT_URL_CRED（带凭据） > QBIT_URL（无凭据，回退白名单模式）。
+  // ★ #79：多 qB —— 同时对接 reseed1 + reseed2（两个都是完整可写客户端，
+  //   cross-seed 会**对每个客户端**判断"该内容是否已存在"，不存在才注入）。
+  //   URL 内嵌凭据（自登录）来自 .env 的 QBIT_URL_CRED / QBIT_URL_CRED_2。
   torrentClients: [
     "qbittorrent:" +
-      (process.env.QBIT_URL_CRED || process.env.QBIT_URL || "http://qbittorrent-reseed:3060"),
+      (process.env.QBIT_URL_CRED || process.env.QBIT_URL || "http://qbit-reseed1:3320"),
+    "qbittorrent:" +
+      (process.env.QBIT_URL_CRED_2 || process.env.QBIT_URL_2 || "http://qbit-reseed2:3340"),
   ],
 
   // 注入到统一分类，便于隔离/汇报/清理（cross-seed 会自动创建该分类）

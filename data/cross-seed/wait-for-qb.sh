@@ -51,7 +51,7 @@
 
 # ---- 可调参数（都可用环境变量覆盖，便于测试；默认值针对生产）----
 # qB 的就绪地址（服务名 + 端口；见上面 ★）。
-QB_URL="${WAIT_QB_URL:-http://qbittorrent-reseed:3060}"
+QB_URL="${WAIT_QB_URL:-http://qbit-reseed1:3320}"
 # 单次探测超时（秒）。点不通要快返回。
 PROBE_TIMEOUT="${WAIT_PROBE_TIMEOUT:-5}"
 # 总等待上限（秒）。**这是硬顶** —— 到点一律照常启动（约束 ①）。
