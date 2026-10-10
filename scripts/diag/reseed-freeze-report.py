@@ -54,7 +54,9 @@ sys.path.insert(0, str(REPO))            # 好 import orchestrator.state
 
 #: 与项目其它脚本一致：默认就是 NAS 的局域网地址（从 NAS 宿主机跑和从 Windows
 #: 跑走的是同一条路）。见 `wait-for-checks.py` 里同一段说明。
-DEFAULT_URL = "http://192.168.0.7:3060"
+#: ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 →
+#:   qbit-reseed1:3320（宿主端口实测见 `docker ps`；3060 已无任何容器发布）。
+DEFAULT_URL = "http://192.168.0.7:3320"
 
 #: NAS 上 drive-loop 写的那份基线（本脚本**只读**，仅用来对照计数）。
 #: ★ UNC 用**正斜杠** —— 反斜杠在这个 Git Bash → Python 的组合里会被当转义符吃掉。

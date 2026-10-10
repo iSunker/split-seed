@@ -37,7 +37,11 @@ def _qbit_api_key() -> str:
 # --------------------------------------------------------------------------- #
 @dataclass
 class QbitConfig:
-    url: str = "http://127.0.0.1:3060"
+    # ★ 这只是**兜底默认**：生产由 `data/hlink/config.yml` 的 `qbittorrent.url`
+    #   （= `http://qbit-reseed1:3320`，容器内服务名直连）覆盖。
+    #   ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 →
+    #     qbit-reseed1:3320。这里跟着改，免得兜底路径指向一个已不存在的端口。
+    url: str = "http://qbit-reseed1:3320"
     # subnet_whitelist = 依赖 qB 的局域网免密白名单
     # password         = 用用户名/密码登录
     # apikey           = ★ 2026-10-05：只读 API Key（Authorization: Bearer），

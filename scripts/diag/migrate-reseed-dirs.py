@@ -90,7 +90,7 @@ qB（:3060）里现在有 **509 条**种子，save_path 全部落在 `reseed_sin
 ★ 脚本是**幂等**的：已在新根下的跳过；正在校验/搬动中的跳过。所以"没搬完"时
   **直接再跑一次**即可，不用记哪些搬过。`--include-checking` 只在明确知道后果时才用。
 
-参数：--qbit-url（默认 http://192.168.0.7:3060）、--old-root、--new-root。
+参数：--qbit-url（默认 http://192.168.0.7:3320）、--old-root、--new-root。
 退出码：0 = 一切符合预期；1 = 发现意外情况（有 save_path 不在预期树里、目标已存在
         同名内容等），此时**不要**加 --apply，先看它列出来的东西。
 """
@@ -111,7 +111,9 @@ try:
 except Exception:  # noqa: BLE001  —— 老 python 没有 reconfigure，乱码也比崩了强
     pass
 
-DEFAULT_QBIT = "http://192.168.0.7:3060"
+#   ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 →
+#     qbit-reseed1:3320（宿主端口实测见 `docker ps`；3060 已无任何容器发布）。
+DEFAULT_QBIT = "http://192.168.0.7:3320"
 OLD_ROOT = "/volume1/video/download/reseed_singles"
 FARM_OLD = "/volume1/video/download/reseed_farm"
 NEW_ROOT = "/volume1/video/download/reseed/reseed_singles"

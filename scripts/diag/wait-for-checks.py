@@ -32,7 +32,7 @@ allocating` 的种子一律**不碰**（见 SUMMARY §18.9.2 —— 对校验中
 ----
     python scripts/wait-for-checks.py                      # 默认等 90 分钟（45 轮 × 120s）
     python scripts/wait-for-checks.py --rounds 8 --gap 60  # 短一点，调试用
-    QBIT_URL=http://192.168.0.7:3060 python scripts/wait-for-checks.py
+    QBIT_URL=http://192.168.0.7:3320 python scripts/wait-for-checks.py
 
 本脚本**只读**：只调 `/api/v2/torrents/info`，不写任何东西。
 """
@@ -53,8 +53,10 @@ except Exception:  # pragma: no cover - 老 python / 非 tty
     pass
 
 #: 与项目其它脚本一致：默认就是 NAS 的局域网地址（从 NAS 宿主机跑和从 Windows
-#: 跑走的是同一条路），不需要改。见 drive-loop-nas.sh 里同一段说明。
-DEFAULT_URL = os.environ.get("QBIT_URL", "http://192.168.0.7:3060")
+#: 跑走的是同一条路），不需要改。
+#: ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 →
+#:   qbit-reseed1:3320（宿主端口实测见 `docker ps`；3060 已无任何容器发布）。
+DEFAULT_URL = os.environ.get("QBIT_URL", "http://192.168.0.7:3320")
 
 #: 搬迁期间的「旧根」—— 用它把「还没搬走的」单独数出来给人看。
 #: 这是**观测量**，不是本脚本的判断依据（判断只看 checkingDL）。

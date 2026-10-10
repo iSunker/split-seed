@@ -2,7 +2,8 @@
 # =====================================================================
 # 小批量试跑 + 度量   —— 在 Windows 的 Git Bash 里直接运行
 #
-#   9696 / 2468 / 3060 三个端口都已发布到宿主机，所以不需要 SSH 上 NAS。
+#   9696 / 2468 / 3320 三个端口都已发布到宿主机，所以不需要 SSH 上 NAS。
+#   ★ 2026-10-06 起保种实例改名/多实例：QB 宿主端口 3060 → 3320（qbit-reseed1）。
 #
 # 测三件事：
 #   1. 实际命中率    —— 抽样 N 部里有几部真的注入成种
@@ -35,7 +36,7 @@ NAS_HOST="${NAS_HOST:?请设置 NAS_HOST（NAS 局域网 IP），或写进 scrip
 NAS_NAME="${NAS_NAME:?请设置 NAS_NAME（NAS 主机名），或写进 scripts/.nasrc}"
 
 CS_URL="http://$NAS_HOST:2468"
-QB_URL="http://$NAS_HOST:3060"
+QB_URL="http://$NAS_HOST:3320"
 PW_URL="http://$NAS_HOST:9696"
 
 # 列目录走 SMB 视图；发给 cross-seed 的必须是 NAS 内路径

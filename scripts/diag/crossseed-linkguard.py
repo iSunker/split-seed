@@ -79,7 +79,9 @@ def qb_alive_by_hash(env: dict) -> dict:
     import urllib.parse
     import urllib.request
 
-    base = "http://%s:3060" % env.get("NAS_IP", "192.168.0.7")
+    # ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 → qbit-reseed1:3320
+    #   （宿主端口实测见 `docker ps`；3060 已无任何容器发布）。
+    base = "http://%s:3320" % env.get("NAS_IP", "192.168.0.7")
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
 
     def call(p, d=None):

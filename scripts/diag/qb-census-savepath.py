@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""qB(:3060) 落点普查 —— **只读**。回答「某一类种子集体异常时，它们是落在哪儿的」。
+"""qB(:3320) 落点普查 —— **只读**。回答「某一类种子集体异常时，它们是落在哪儿的」。
 
 什么时候用它
 ------------
@@ -62,7 +62,9 @@ except OSError as e:
     print("✗ 读不到 .env：%s" % e, file=sys.stderr)
     sys.exit(1)
 
-BASE = "http://%s:3060" % ENV.get("NAS_IP", "192.168.0.7")
+# ★ 2026-10-06 起保种实例改名/多实例：旧 qbittorrent-reseed:3060 → qbit-reseed1:3320
+#   （宿主端口实测见 `docker ps`；3060 已无任何容器发布）。
+BASE = "http://%s:3320" % ENV.get("NAS_IP", "192.168.0.7")
 _op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
 
 
